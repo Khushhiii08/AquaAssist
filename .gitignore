@@ -1,0 +1,13 @@
+# Python Environment
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Local Data Storage (Strictly Untracked)
+data/raw_pdfs/*.pdf
+data/chroma_db/
+
+# OS Metadata
+.DS_Store
+Thumbs.db
