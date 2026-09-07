@@ -1,4 +1,5 @@
 import os
+# Keeps CPU thread usage safe for everyone (Mac/Windows/Linux)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["OMP_NUM_THREADS"] = "4"
 
@@ -61,6 +62,15 @@ def extract_metadata_and_chunk(text, source_filename):
 
     return chunks
 
+def get_optimal_device():
+    """Dynamically detects the best hardware available."""
+    if torch.cuda.is_available():
+        return "cuda"  # For Windows/Linux with NVIDIA GPUs
+    elif torch.backends.mps.is_available():
+        return "mps"   # For Mac Apple Silicon
+    else:
+        return "cpu"   # Safe fallback for standard laptops
+
 def run_hybrid_ingestion():
     print("[*] Initializing Phase 1: Hybrid Corpus Ingestion & Indexing...")
     
@@ -108,9 +118,9 @@ def run_hybrid_ingestion():
         json.dump(all_chunks, f, indent=4)
     print(f"[+] Successfully saved {len(all_chunks)} structured metadata chunks to {CHUNKS_PATH}")
 
-    print("[*] Loading BAAI/bge-m3 model with Apple Silicon MPS acceleration...")
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    print(f"[*] Target Hardware Device: {device}")
+    # Initialize model with cross-platform hardware detection
+    device = get_optimal_device()
+    print(f"[*] Loading BAAI/bge-m3 model. Target Hardware Device: {device.upper()}")
     
     embed_model = SentenceTransformer("BAAI/bge-m3", device=device)
 
