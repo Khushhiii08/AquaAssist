@@ -1,0 +1,44 @@
+{
+  "number_of_queries": 5,
+  "model_load_seconds": 10.776869700057432,
+  "embedding_mean_seconds": 0.1194909599609673,
+  "retrieval_mean_seconds": 0.0023460399825125933,
+  "total_mean_seconds": 0.12183699994347989,
+  "queries": [
+    {
+      "query_number": 1,
+      "query": "What pH ranges were reported at L1, L2 and L3?",
+      "embedding_seconds": 0.21055319998413324,
+      "retrieval_seconds": 0.0027626000810414553,
+      "total_seconds": 0.2133158000651747
+    },
+    {
+      "query_number": 2,
+      "query": "How did dissolved oxygen change from L1 to L3?",
+      "embedding_seconds": 0.0940644999500364,
+      "retrieval_seconds": 0.0021953999530524015,
+      "total_seconds": 0.09625989990308881
+    },
+    {
+      "query_number": 3,
+      "query": "What diseases were Indian white shrimp brooders screened for?",
+      "embedding_seconds": 0.09782719984650612,
+      "retrieval_seconds": 0.002291399985551834,
+      "total_seconds": 0.10011859983205795
+    },
+    {
+      "query_number": 4,
+      "query": "How is biosecurity defined in the FAO guidance?",
+      "embedding_seconds": 0.09749209997244179,
+      "retrieval_seconds": 0.002322999993339181,
+      "total_seconds": 0.09981509996578097
+    },
+    {
+      "query_number": 5,
+      "query": "What role did shrimp farmer groups play in disease prevention?",
+      "embedding_seconds": 0.09751780005171895,
+      "retrieval_seconds": 0.0021577998995780945,
+      "total_seconds": 0.09967559995129704
+    }
+  ]
+}
