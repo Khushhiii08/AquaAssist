@@ -1,44 +1,44 @@
 {
   "number_of_queries": 5,
-  "model_load_seconds": 10.776869700057432,
-  "embedding_mean_seconds": 0.1194909599609673,
-  "retrieval_mean_seconds": 0.0023460399825125933,
-  "total_mean_seconds": 0.12183699994347989,
+  "model_load_seconds": 32.1220861999318,
+  "embedding_mean_seconds": 0.4259485000744462,
+  "retrieval_mean_seconds": 0.014247619919478894,
+  "total_mean_seconds": 0.4401961199939251,
   "queries": [
     {
       "query_number": 1,
       "query": "What pH ranges were reported at L1, L2 and L3?",
-      "embedding_seconds": 0.21055319998413324,
-      "retrieval_seconds": 0.0027626000810414553,
-      "total_seconds": 0.2133158000651747
+      "embedding_seconds": 1.5562460001092404,
+      "retrieval_seconds": 0.015693399822339416,
+      "total_seconds": 1.5719393999315798
     },
     {
       "query_number": 2,
       "query": "How did dissolved oxygen change from L1 to L3?",
-      "embedding_seconds": 0.0940644999500364,
-      "retrieval_seconds": 0.0021953999530524015,
-      "total_seconds": 0.09625989990308881
+      "embedding_seconds": 0.1330621000379324,
+      "retrieval_seconds": 0.0029498999938368797,
+      "total_seconds": 0.13601200003176928
     },
     {
       "query_number": 3,
       "query": "What diseases were Indian white shrimp brooders screened for?",
-      "embedding_seconds": 0.09782719984650612,
-      "retrieval_seconds": 0.002291399985551834,
-      "total_seconds": 0.10011859983205795
+      "embedding_seconds": 0.12249990017153323,
+      "retrieval_seconds": 0.015295399818569422,
+      "total_seconds": 0.13779529999010265
     },
     {
       "query_number": 4,
       "query": "How is biosecurity defined in the FAO guidance?",
-      "embedding_seconds": 0.09749209997244179,
-      "retrieval_seconds": 0.002322999993339181,
-      "total_seconds": 0.09981509996578097
+      "embedding_seconds": 0.1167860000859946,
+      "retrieval_seconds": 0.014940599910914898,
+      "total_seconds": 0.1317265999969095
     },
     {
       "query_number": 5,
       "query": "What role did shrimp farmer groups play in disease prevention?",
-      "embedding_seconds": 0.09751780005171895,
-      "retrieval_seconds": 0.0021577998995780945,
-      "total_seconds": 0.09967559995129704
+      "embedding_seconds": 0.20114849996753037,
+      "retrieval_seconds": 0.02235880005173385,
+      "total_seconds": 0.22350730001926422
     }
   ]
 }
