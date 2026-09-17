@@ -1,11 +1,10 @@
 import os
-# Keeps CPU thread usage safe for everyone (Mac/Windows/Linux)
+import json
+import re
+
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["OMP_NUM_THREADS"] = "4"
 
-import json
-import re
-from pathlib import Path
 import chromadb
 import torch
 from sentence_transformers import SentenceTransformer
@@ -17,95 +16,250 @@ PROCESSED_DATA_DIR = "./data/processed"
 CHROMA_DB_DIR = "./data/chroma_db"
 CHUNKS_PATH = os.path.join(PROCESSED_DATA_DIR, "chunks.json")
 
-def extract_metadata_and_chunk(text, source_filename):
+MAX_WORDS = 50
+
+
+def word_count(text):
+    return len(re.findall(r"\S+", text))
+
+
+def split_into_bounded_chunks(text, max_words=MAX_WORDS):
+    text = re.sub(r"\s+", " ", text).strip()
+
+    if not text:
+        return []
+
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+
     chunks = []
-    raw_paragraphs = [p.strip() for p in text.split("\n\n") if len(p.strip()) > 50]
-    
-    if not raw_paragraphs:
-        raw_paragraphs = [s.strip() for s in text.split(". ") if len(s.strip()) > 50]
+    current_words = []
 
-    for para in raw_paragraphs:
-        lower_para = para.lower()
-        
-        if any(w in lower_para for w in ["wssv", "ehp", "vibrio", "disease", "pathogen", "mortality", "syndrome"]):
-            category = "Disease Diagnostics"
-        elif any(w in lower_para for w in ["oxygen", "ph", "salinity", "ammonia", "tan", "alkalinity", "temperature", "ppm", "ppt"]):
-            category = "Water Quality Limits"
-        elif any(w in lower_para for w in ["dosage", "treatment", "probiotic", "application", "gram", "ml", "disinfection"]):
-            category = "Dosage & Treatment"
+    for sentence in sentences:
+        sentence_words = sentence.split()
+
+        if not sentence_words:
+            continue
+
+        if len(sentence_words) > max_words:
+            if current_words:
+                chunks.append(" ".join(current_words))
+                current_words = []
+
+            for start in range(0, len(sentence_words), max_words):
+                chunks.append(
+                    " ".join(sentence_words[start:start + max_words])
+                )
+
+            continue
+
+        if len(current_words) + len(sentence_words) <= max_words:
+            current_words.extend(sentence_words)
         else:
-            category = "Husbandry & Management"
+            if current_words:
+                chunks.append(" ".join(current_words))
 
-        if "vannamei" in lower_para:
-            species = "Litopenaeus vannamei"
-        elif "rohu" in lower_para or "labeo rohita" in lower_para:
-            species = "Labeo rohita"
-        else:
-            species = "General Aquaculture"
+            current_words = sentence_words.copy()
 
-        parameters = {}
-        ph_match = re.search(r"ph\s*([0-9\.-]+)", lower_para)
-        if ph_match:
-            parameters["pH"] = ph_match.group(1)
-            
-        do_match = re.search(r"([0-9\.]+)\s*(?:mg/l|ppm)", lower_para)
-        if do_match:
-            parameters["Dissolved_Oxygen"] = do_match.group(1)
-
-        chunks.append({
-            "source_document": source_filename,
-            "domain_category": category,
-            "target_species": species,
-            "extracted_parameters": parameters,
-            "text": para
-        })
+    if current_words:
+        chunks.append(" ".join(current_words))
 
     return chunks
 
+
+def classify_category(text):
+    lower_text = text.lower()
+
+    if any(
+        word in lower_text
+        for word in [
+            "wssv",
+            "ehp",
+            "vibrio",
+            "disease",
+            "pathogen",
+            "mortality",
+            "syndrome",
+        ]
+    ):
+        return "Disease Diagnostics"
+
+    if any(
+        word in lower_text
+        for word in [
+            "oxygen",
+            "ph",
+            "salinity",
+            "ammonia",
+            "tan",
+            "alkalinity",
+            "temperature",
+            "ppm",
+            "ppt",
+        ]
+    ):
+        return "Water Quality Limits"
+
+    if any(
+        word in lower_text
+        for word in [
+            "dosage",
+            "treatment",
+            "probiotic",
+            "application",
+            "gram",
+            "ml",
+            "disinfection",
+        ]
+    ):
+        return "Dosage & Treatment"
+
+    return "Husbandry & Management"
+
+
+def detect_species(text):
+    lower_text = text.lower()
+
+    if "vannamei" in lower_text:
+        return "Litopenaeus vannamei"
+
+    if "rohu" in lower_text or "labeo rohita" in lower_text:
+        return "Labeo rohita"
+
+    return "General Aquaculture"
+
+
+def extract_parameters(text):
+    lower_text = text.lower()
+    parameters = {}
+
+    ph_match = re.search(
+        r"\bph\s*(?:=|:)?\s*([0-9]+(?:\.[0-9]+)?)",
+        lower_text,
+    )
+
+    if ph_match:
+        parameters["pH"] = ph_match.group(1)
+
+    do_match = re.search(
+        r"(?:dissolved\s+oxygen|\bdo\b)"
+        r"\s*(?:=|:|of|at)?\s*"
+        r"([0-9]+(?:\.[0-9]+)?)"
+        r"\s*(?:mg/l|mg/litre|ppm)?",
+        lower_text,
+    )
+
+    if do_match:
+        parameters["Dissolved_Oxygen"] = do_match.group(1)
+
+    return parameters
+
+
+def extract_metadata_and_chunk(text, source_filename):
+    bounded_chunks = split_into_bounded_chunks(text)
+
+    chunks = []
+
+    for chunk_text in bounded_chunks:
+        chunks.append(
+            {
+                "source_document": source_filename,
+                "domain_category": classify_category(chunk_text),
+                "target_species": detect_species(chunk_text),
+                "extracted_parameters": extract_parameters(chunk_text),
+                "text": chunk_text,
+            }
+        )
+
+    return chunks
+
+
 def get_optimal_device():
-    """Dynamically detects the best hardware available."""
     if torch.cuda.is_available():
-        return "cuda"  # For Windows/Linux with NVIDIA GPUs
-    elif torch.backends.mps.is_available():
-        return "mps"   # For Mac Apple Silicon
-    else:
-        return "cpu"   # Safe fallback for standard laptops
+        return "cuda"
+
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+
+    return "cpu"
+
 
 def run_hybrid_ingestion():
-    print("[*] Initializing Phase 1: Hybrid Corpus Ingestion & Indexing...")
-    
+    print("[*] Initializing corpus ingestion and indexing...")
+
     os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
     os.makedirs(CHROMA_DB_DIR, exist_ok=True)
-    
+
     all_chunks = []
-    
+
     if not os.path.exists(RAW_PDFS_DIR) or not os.listdir(RAW_PDFS_DIR):
-        print(f"[!] Warning: No PDFs found in {RAW_PDFS_DIR}. Creating placeholder corpus.")
+        print(f"[!] Warning: No source files found in {RAW_PDFS_DIR}.")
+
         os.makedirs(RAW_PDFS_DIR, exist_ok=True)
-        sample_path = os.path.join(RAW_PDFS_DIR, "ICAR-CIBA_Sample_Guidelines.txt")
+
+        sample_path = os.path.join(
+            RAW_PDFS_DIR,
+            "ICAR-CIBA_Sample_Guidelines.txt",
+        )
+
         with open(sample_path, "w", encoding="utf-8") as f:
-            f.write("ICAR-CIBA guidelines for Litopenaeus vannamei culture. Optimal dissolved oxygen must be maintained above 4.0 mg/L. pH range should be 7.5 to 8.5. For White Spot Syndrome Virus (WSSV), immediate quarantine and strict biosecurity protocols are required. Total Ammonia Nitrogen (TAN) must not exceed 0.05 mg/L.")
-            
+            f.write(
+                "ICAR-CIBA guidelines for Litopenaeus vannamei culture. "
+                "Optimal dissolved oxygen must be maintained above 4.0 mg/L. "
+                "pH range should be 7.5 to 8.5. "
+                "For White Spot Syndrome Virus (WSSV), immediate quarantine "
+                "and strict biosecurity protocols are required. "
+                "Total Ammonia Nitrogen (TAN) must not exceed 0.05 mg/L."
+            )
+
     global_chunk_counter = 0
 
-    for filename in os.listdir(RAW_PDFS_DIR):
+    for filename in sorted(os.listdir(RAW_PDFS_DIR)):
         file_path = os.path.join(RAW_PDFS_DIR, filename)
-        file_chunks = []
-        
-        if filename.endswith(".txt") or filename.endswith(".md"):
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            file_chunks = extract_metadata_and_chunk(content, filename)
-        elif filename.endswith(".pdf"):
+
+        if not os.path.isfile(file_path):
+            continue
+
+        lower_filename = filename.lower()
+        content = ""
+
+        if lower_filename.endswith(".txt") or lower_filename.endswith(".md"):
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except Exception as e:
+                print(f"[-] Error reading {filename}: {e}")
+                continue
+
+        elif lower_filename.endswith(".pdf"):
             try:
                 import pypdf
+
                 reader = pypdf.PdfReader(file_path)
-                content = "".join([page.extract_text() or "" for page in reader.pages])
-                file_chunks = extract_metadata_and_chunk(content, filename)
+                page_texts = []
+
+                for page in reader.pages:
+                    page_texts.append(page.extract_text() or "")
+
+                content = "\n\n".join(page_texts)
+
             except Exception as e:
                 print(f"[-] Error reading PDF {filename}: {e}")
+                continue
 
-        # Assign strictly unique global IDs across all files
+        else:
+            print(f"[*] Skipping unsupported file: {filename}")
+            continue
+
+        file_chunks = extract_metadata_and_chunk(
+            content,
+            filename,
+        )
+
+        print(
+            f"[+] {filename}: "
+            f"{len(file_chunks)} chunks generated"
+        )
+
         for chunk in file_chunks:
             chunk["chunk_id"] = f"CHK-{global_chunk_counter:05d}"
             global_chunk_counter += 1
@@ -114,52 +268,124 @@ def run_hybrid_ingestion():
     if not all_chunks:
         raise ValueError("[-] No text chunks generated.")
 
+    oversized = [
+        chunk
+        for chunk in all_chunks
+        if word_count(chunk["text"]) > MAX_WORDS
+    ]
+
+    if oversized:
+        raise ValueError(
+            f"[-] Found {len(oversized)} chunks over "
+            f"{MAX_WORDS} words."
+        )
+
     with open(CHUNKS_PATH, "w", encoding="utf-8") as f:
-        json.dump(all_chunks, f, indent=4)
-    print(f"[+] Successfully saved {len(all_chunks)} structured metadata chunks to {CHUNKS_PATH}")
+        json.dump(
+            all_chunks,
+            f,
+            indent=2,
+            ensure_ascii=False,
+        )
 
-    # Initialize model with cross-platform hardware detection
-    device = get_optimal_device()
-    print(f"[*] Loading BAAI/bge-m3 model. Target Hardware Device: {device.upper()}")
-    
-    embed_model = SentenceTransformer("BAAI/bge-m3", device=device)
-
-    print(f"[*] Connecting to local ChromaDB at {CHROMA_DB_DIR}...")
-    client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
-    
-    collection_name = "aquaculture_knowledge"
-    try:
-        client.delete_collection(collection_name)
-    except Exception:
-        pass
-        
-    collection = client.create_collection(name=collection_name)
-
-    print("[*] Encoding chunks in safe batches and inserting into ChromaDB...")
-    ids = [c["chunk_id"] for c in all_chunks]
-    texts = [c["text"] for c in all_chunks]
-    metadatas = [{
-        "source": c["source_document"],
-        "category": c["domain_category"],
-        "species": c["target_species"],
-        "parameters": json.dumps(c["extracted_parameters"])
-    } for c in all_chunks]
-
-    embeddings = embed_model.encode(
-        texts, 
-        batch_size=8, 
-        show_progress_bar=True,
-        device=device
-    ).tolist()
-
-    collection.add(
-        ids=ids,
-        documents=texts,
-        embeddings=embeddings,
-        metadatas=metadatas
+    print(
+        f"[+] Saved {len(all_chunks)} chunks to "
+        f"{CHUNKS_PATH}"
     )
 
-    print(f"[+] Phase 1 Complete! Indexed {len(ids)} hybrid-backed chunks into ChromaDB collection '{collection_name}'.")
+    max_words_found = max(
+        word_count(chunk["text"])
+        for chunk in all_chunks
+    )
+
+    print(
+        f"[+] Maximum chunk size: "
+        f"{max_words_found} words"
+    )
+
+    device = get_optimal_device()
+
+    print(
+        f"[*] Loading BAAI/bge-m3 model. "
+        f"Device: {device.upper()}"
+    )
+
+    embed_model = SentenceTransformer(
+        "BAAI/bge-m3",
+        device=device,
+    )
+
+    print(
+        f"[*] Connecting to ChromaDB at "
+        f"{CHROMA_DB_DIR}..."
+    )
+
+    client = chromadb.PersistentClient(
+        path=CHROMA_DB_DIR
+    )
+
+    collection_name = "aquaculture_knowledge"
+
+    try:
+        client.delete_collection(collection_name)
+        print("[*] Deleted old ChromaDB collection.")
+    except Exception:
+        pass
+
+    collection = client.create_collection(
+        name=collection_name
+    )
+
+    print("[*] Encoding chunks and inserting into ChromaDB...")
+
+    batch_size = 256
+
+    for start in range(0, len(all_chunks), batch_size):
+        batch = all_chunks[start:start + batch_size]
+
+        ids = [chunk["chunk_id"] for chunk in batch]
+        texts = [chunk["text"] for chunk in batch]
+
+        metadatas = [
+            {
+                "source": chunk["source_document"],
+                "category": chunk["domain_category"],
+                "species": chunk["target_species"],
+                "parameters": json.dumps(
+                    chunk["extracted_parameters"]
+                ),
+            }
+            for chunk in batch
+        ]
+
+        embeddings = embed_model.encode(
+            texts,
+            batch_size=8,
+            show_progress_bar=True,
+            device=device,
+        ).tolist()
+
+        collection.add(
+            ids=ids,
+            documents=texts,
+            embeddings=embeddings,
+            metadatas=metadatas,
+        )
+
+        print(
+            f"[+] Indexed "
+            f"{min(start + batch_size, len(all_chunks))}"
+            f"/{len(all_chunks)} chunks"
+        )
+
+    print("[+] Ingestion complete!")
+
+    print(
+        f"[+] ChromaDB collection "
+        f"'{collection_name}' contains "
+        f"{collection.count()} chunks."
+    )
+
 
 if __name__ == "__main__":
     run_hybrid_ingestion()
