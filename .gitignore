@@ -1,13 +1,24 @@
-# Python Environment
+# Large AI/ML Model Weights
+models/
+*.gguf
+*.bin
+*.pt
+*.pth
+*.safetensors
+
+# Local Vector Database (ChromaDB)
+chroma_db/
+*.sqlite3
+
+# Python Virtual Environments
 venv/
 env/
+.env
+
+# Python Cache & Logs
 __pycache__/
-*.pyc
+*.py[cod]
+*.log
 
-# Local Data Storage (Strictly Untracked)
-data/raw_pdfs/*.pdf
-data/chroma_db/
-
-# OS Metadata
+# macOS System Files
 .DS_Store
-Thumbs.db

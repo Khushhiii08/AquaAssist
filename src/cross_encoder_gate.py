@@ -8,16 +8,18 @@ EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
 CROSS_ENCODER_MODEL = "cross-encoder/nli-deberta-v3-small"
 ENTAILMENT_THRESHOLD = 0.85
 
+#Initializing the embedding and cross-encoder models to avoid reloading them for each query. 
+#It avoids the overhead of loading the models multiple times, which can be time-consuming and resource-intensive.
+print(f"[*] Loading Embedding model ({EMBEDDING_MODEL_NAME})...")
+embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+
+print(f"[*] Loading Cross-Encoder model ({CROSS_ENCODER_MODEL})...")
+ce_model = CrossEncoder(CROSS_ENCODER_MODEL)
+
+print(f"[*] Connecting to local ChromaDB at {DB_PATH}...")
+client = chromadb.PersistentClient(path=DB_PATH)
+
 def initialize_gate():
-    print(f"[*] Loading Embedding model ({EMBEDDING_MODEL_NAME})...")
-    embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-    
-    print(f"[*] Loading Cross-Encoder model ({CROSS_ENCODER_MODEL})...")
-    ce_model = CrossEncoder(CROSS_ENCODER_MODEL)
-    
-    print(f"[*] Connecting to local ChromaDB at {DB_PATH}...")
-    client = chromadb.PersistentClient(path=DB_PATH)
-    
     collections = client.list_collections()
     if not collections:
         raise ValueError("[-] Error: The chroma_db folder contains no collections.")
