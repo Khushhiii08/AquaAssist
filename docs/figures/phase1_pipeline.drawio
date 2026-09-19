@@ -19,7 +19,7 @@
         <mxCell id="xUQG_pz5DuelYNKza33L-25" edge="1" parent="1" source="xUQG_pz5DuelYNKza33L-3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#FFFFFF;fontColor=#FFFFFF;" target="xUQG_pz5DuelYNKza33L-24" value="">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="xUQG_pz5DuelYNKza33L-3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;labelBackgroundColor=none;fillColor=#EEEEEE;strokeColor=#FFFFFF;fontColor=#1A1A1A;" value="&lt;b&gt;PyMuPDF Ingestion &amp;amp; Semantic Chunking&lt;br&gt;&lt;/b&gt;&lt;span&gt;150-word chunks&lt;/span&gt;&lt;br&gt;&lt;span&gt;30-word overlap&lt;/span&gt;&lt;b&gt;&lt;/b&gt;" vertex="1">
+        <mxCell id="xUQG_pz5DuelYNKza33L-3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;labelBackgroundColor=none;fillColor=#EEEEEE;strokeColor=#FFFFFF;fontColor=#1A1A1A;" value="&lt;strong&gt;PyMuPDF Ingestion &amp;amp; Semantic Chunking&lt;/strong&gt;&lt;br&gt;Maximum 50-word chunks" vertex="1">
           <mxGeometry height="100" width="120" x="288" y="114" as="geometry" />
         </mxCell>
         <mxCell id="xUQG_pz5DuelYNKza33L-22" edge="1" parent="1" source="xUQG_pz5DuelYNKza33L-4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=none;strokeColor=#FFFFFF;fontColor=default;" target="xUQG_pz5DuelYNKza33L-5" value="">
