@@ -1,0 +1,24 @@
+{
+    "0.5B": {
+        "model_path": "models/qwen-2.5-0.5b-instruct.gguf",
+        "model_load_time_seconds": 0.6676,
+        "memory_before_load_mb": 37.87,
+        "memory_after_load_mb": 156.84,
+        "memory_increase_mb": 118.97,
+        "time_to_first_token_seconds": 0.5147,
+        "total_generation_time_seconds": 4.5704,
+        "stream_chunks": 101,
+        "response": "Common causes of low dissolved oxygen in aquaculture ponds include:\n1. Excessive water intake: If the water intake is too high, it can lead to increased dissolved oxygen consumption.\n2. Excessive nutrient addition: Adding too much nitrogen and phosphorus to the water can also result in high dissolved oxygen levels.\n3. Excessive water evaporation: If the water evaporates too quickly, it can cause dissolved oxygen levels to decrease.\n4. Excessive water temperature increase: If the water temperature"
+    },
+    "1.5B": {
+        "model_path": "models/qwen-2.5-1.5b-instruct.gguf",
+        "model_load_time_seconds": 3.1778,
+        "memory_before_load_mb": 44.21,
+        "memory_after_load_mb": 1269.79,
+        "memory_increase_mb": 1225.58,
+        "time_to_first_token_seconds": 1.5122,
+        "total_generation_time_seconds": 7.3004,
+        "stream_chunks": 78,
+        "response": "Common causes of low dissolved oxygen in aquaculture ponds include excessive algae growth, poor aeration, high water temperatures, and reduced water flow. These factors can reduce the amount of oxygen in the water, leading to hypoxia in the fish and other aquatic organisms. Proper management, including regular aeration and monitoring, is crucial to maintaining optimal water quality for aquaculture operations."
+    }
+}
