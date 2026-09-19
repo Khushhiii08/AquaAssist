@@ -1,6 +1,7 @@
 import time
 import json
 import psutil
+import threading
 from pathlib import Path
 from llama_cpp import Llama
 
@@ -17,9 +18,19 @@ What are the common causes of low dissolved oxygen in aquaculture ponds?
 """
 
 
+process = psutil.Process()
+
+
 def get_memory_mb():
-    process = psutil.Process()
     return process.memory_info().rss / (1024 * 1024)
+
+
+def monitor_resources(stop_event, measurements):
+    while not stop_event.is_set():
+        measurements.append({
+            "memory_mb": get_memory_mb(),
+            "cpu_percent": process.cpu_percent(interval=0.1)
+        })
 
 
 results = {}
@@ -42,6 +53,17 @@ for model_name, model_path in MODELS.items():
     print(f"{model_name} loaded in {load_time:.2f} seconds")
     print("Generating response...")
 
+    measurements = []
+    stop_event = threading.Event()
+
+    monitor_thread = threading.Thread(
+        target=monitor_resources,
+        args=(stop_event, measurements)
+    )
+
+    process.cpu_percent(interval=None)
+    monitor_thread.start()
+
     generation_start = time.perf_counter()
     first_token_time = None
     token_count = 0
@@ -63,8 +85,23 @@ for model_name, model_path in MODELS.items():
 
     generation_end = time.perf_counter()
 
+    stop_event.set()
+    monitor_thread.join()
+
     ttft = first_token_time - generation_start
     total_generation_time = generation_end - generation_start
+
+    peak_memory = max(
+        item["memory_mb"] for item in measurements
+    )
+
+    average_cpu = sum(
+        item["cpu_percent"] for item in measurements
+    ) / len(measurements)
+
+    peak_cpu = max(
+        item["cpu_percent"] for item in measurements
+    )
 
     results[model_name] = {
         "model_path": model_path,
@@ -74,6 +111,11 @@ for model_name, model_path in MODELS.items():
         "memory_increase_mb": round(
             memory_after_load - memory_before, 2
         ),
+        "peak_memory_during_generation_mb": round(
+            peak_memory, 2
+        ),
+        "average_cpu_percent": round(average_cpu, 2),
+        "peak_cpu_percent": round(peak_cpu, 2),
         "time_to_first_token_seconds": round(ttft, 4),
         "total_generation_time_seconds": round(
             total_generation_time, 4
@@ -84,6 +126,9 @@ for model_name, model_path in MODELS.items():
 
     print(f"TTFT: {ttft:.2f} seconds")
     print(f"Total generation time: {total_generation_time:.2f} seconds")
+    print(f"Peak memory: {peak_memory:.2f} MB")
+    print(f"Average CPU: {average_cpu:.2f}%")
+    print(f"Peak CPU: {peak_cpu:.2f}%")
 
     del llm
 
