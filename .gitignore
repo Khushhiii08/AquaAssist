@@ -13,12 +13,20 @@ chroma_db/
 # Python Virtual Environments
 venv/
 env/
+.venv/
 .env
 
 # Python Cache & Logs
 __pycache__/
 *.py[cod]
+*.pyc
 *.log
 
-# macOS System Files
+# OS Metadata
 .DS_Store
+Thumbs.db
+
+# Local files
+chroma_db.zip
+command_history.txt
+temp_farmer_audio.*

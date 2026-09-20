@@ -1,0 +1,10 @@
+root ::= "{" ws "\"evidence_chunk_id\"" ws ":" ws string "," ws "\"parameter_identified\"" ws ":" ws string "," ws "\"recommended_action_telugu\"" ws ":" ws string ws "}"
+
+string ::= "\"" characters "\""
+
+characters ::= character*
+character ::= [^"\\] | "\\" escape
+
+escape ::= "\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t"
+
+ws ::= [ \t\n\r]*
