@@ -1,32 +1,57 @@
-# Large AI/ML Model Weights
+# Python / Virtual Environments
+venv/
+ENV/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Environment Variables & Secrets
+.env
+.streamlit/secrets.toml
+
+# Local Model Weights & Safetensors (Preventing gigabyte-scale commits)
 models/
+*.safetensors
 *.gguf
 *.bin
 *.pt
-*.pth
-*.safetensors
 
-# Local Vector Database (ChromaDB)
-chroma_db/
-*.sqlite3
+# Temporary Audio Artifacts & Cache
+temp_audio/
+*.mp3
+*.wav
 
-# Python Virtual Environments
-venv/
-env/
-.venv/
-.env
+# IDE / Editor Files
+.vscode/
+.idea/
+*.swp
+*.swo
 
-# Python Cache & Logs
-__pycache__/
-*.py[cod]
-*.pyc
-*.log
-
-# OS Metadata
+# OS Generated Files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
-
-# Local files
-chroma_db.zip
-command_history.txt
-temp_farmer_audio.*

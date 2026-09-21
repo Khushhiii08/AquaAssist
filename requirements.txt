@@ -1,19 +1,9 @@
-#Inference Engines & LLM Support
-llama-cpp-python==0.2.90
-whisper-cpp-python==0.1.1
-
-#Hugging Face & PyTorch Ecosystem
-torch==2.4.0
-transformers==4.44.2
-sentence-transformers==3.0.1
-huggingface-hub==0.24.6
-
-#Vector Database
-chromadb==0.5.5
-
-#Edge Frontend UI
-streamlit==1.38.0
-
-#Data Processing & Types
-pydantic==2.8.2
-numpy==1.26.4
+streamlit>=1.32.0
+gtts>=2.5.4
+chromadb>=0.4.22
+transformers>=4.38.0
+sentence-transformers>=2.5.0
+openai-whisper>=20231117
+requests>=2.28.0
+torch>=2.0.0
+pydantic>=2.0.0

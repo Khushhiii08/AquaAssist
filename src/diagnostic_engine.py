@@ -1,3 +1,4 @@
+import re
 import os
 import chromadb
 import torch
@@ -16,14 +17,46 @@ COLLECTION_NAME = "aquaculture_knowledge"
 
 TOP_K = 5
 
+# --- DECISION THRESHOLDS ---
 ENTAILMENT_THRESHOLD = 0.75
 NEUTRAL_THRESHOLD = 0.40
 CONTRADICTION_THRESHOLD = 0.30
 
+# NEW: Retrieval Quality Filter (Lower distance = better match. 0.80 is a strict cutoff for BGE-M3)
+MAX_DISTANCE_THRESHOLD = 0.80
+
+def detect_conflicting_measurements(farmer_query):
+    """
+    ISSUE-05: Precise conflict detector.
+    Only triggers if multiple unique values exist for the *same* parameter.
+    """
+    text = farmer_query.lower()
+    
+    # Extract numbers near specific parameter labels
+    do_pattern = r"(?:do|dissolved oxygen|oxygen)[^\d]{0,25}(\d+(?:\.\d+)?)"
+    ph_pattern = r"\bph[^\d]{0,25}(\d+(?:\.\d+)?)"
+    
+    do_matches = re.findall(do_pattern, text)
+    ph_matches = re.findall(ph_pattern, text)
+    
+    do_values = set(float(val) for val in do_matches)
+    ph_values = set(float(val) for val in ph_matches)
+    
+    conflicts = []
+    # Only a conflict if there are 2+ distinct numbers for DO or 2+ distinct numbers for pH
+    if len(do_values) > 1:
+        conflicts.append(f"Dissolved Oxygen readings: {do_values}")
+    if len(ph_values) > 1:
+        conflicts.append(f"pH readings: {ph_values}")
+        
+    if conflicts:
+        print(f"\n[!] CONFLICT GATE TRIGGERED: Contradictory measurements found for {', '.join(conflicts)}")
+        return True
+        
+    return False
 
 def load_engine():
     """Load BGE-M3, fine-tuned DeBERTa, and ChromaDB."""
-
     print("[*] Loading BGE-M3...")
     embedding_model = SentenceTransformer(EMBEDDING_MODEL)
 
@@ -39,9 +72,8 @@ def load_engine():
     return embedding_model, nli_model, collection
 
 
-def retrieve_evidence(hypothesis, embedding_model, collection, top_k=TOP_K):
-    """Retrieve relevant evidence chunks from ChromaDB."""
-
+def retrieve_evidence(hypothesis, embedding_model, collection, top_k=10):
+    """Retrieve relevant evidence chunks from ChromaDB using similarity ranking instead of arbitrary distance dropoffs."""
     embedding = embedding_model.encode(
         [hypothesis],
         normalize_embeddings=True
@@ -56,14 +88,23 @@ def retrieve_evidence(hypothesis, embedding_model, collection, top_k=TOP_K):
     evidence = []
 
     for i in range(len(results["ids"][0])):
+        distance = results["distances"][0][i]
+        
+        # BGE-M3 distance sanity check (safely capture anything reasonably close)
+        if distance > 1.2:  
+            print(f"[!] Dropping completely unrelated chunk {results['ids'][0][i]} (Distance: {distance:.4f})")
+            continue
+
         evidence.append({
             "id": results["ids"][0][i],
             "text": results["documents"][0][i],
             "metadata": results["metadatas"][0][i],
-            "distance": results["distances"][0][i]
+            "distance": distance
         })
 
-    return evidence
+    # Sort by closest distance first to guarantee the strongest chunk is evaluated by NLI
+    evidence = sorted(evidence, key=lambda x: x["distance"])
+    return evidence[:5]  # Keep top 5 best matches
 
 
 def evaluate_evidence(hypothesis, evidence_chunks, nli_model):
@@ -76,7 +117,6 @@ def evaluate_evidence(hypothesis, evidence_chunks, nli_model):
         print("HYPOTHESIS:", hypothesis)
 
     MAX_NLI_WORDS = 50
-
     pairs = []
 
     for chunk in evidence_chunks:
@@ -103,79 +143,35 @@ def evaluate_evidence(hypothesis, evidence_chunks, nli_model):
 
     return evaluated
 
-    for chunk, logit in zip(evidence_chunks, logits):
-
-        probabilities = torch.softmax(
-            torch.tensor(logit),
-            dim=0
-        ).tolist()
-
-        result = {
-            **chunk,
-            "contradiction": float(probabilities[0]),
-            "entailment": float(probabilities[1]),
-            "neutral": float(probabilities[2])
-        }
-
-        evaluated.append(result)
-
-    return evaluated
-
 
 def make_decision(evaluated_chunks):
-    """
-    Convert multiple NLI results into one three-way routing decision.
-    """
-
+    """Convert multiple NLI results into one three-way routing decision."""
     if not evaluated_chunks:
         return "CLARIFY"
 
-    # ---------------------------------------------------------
-    # 1. Identify strong contradiction evidence
-    # ---------------------------------------------------------
-
+    # 1. Check for severe multi-chunk contradiction (ABSTAIN)
     strong_contradictions = [
-        chunk
-        for chunk in evaluated_chunks
-        if (
-            chunk["contradiction"] > CONTRADICTION_THRESHOLD
-            and chunk["contradiction"] > chunk["entailment"]
-            and chunk["contradiction"] > chunk["neutral"]
-        )
+        chunk for chunk in evaluated_chunks
+        if chunk["contradiction"] > 0.75 and chunk["contradiction"] > chunk["entailment"]
     ]
-
-    highly_contradictory = [
-        chunk
-        for chunk in strong_contradictions
-        if chunk["contradiction"] >= 0.75
-    ]
-
-    if len(highly_contradictory) >= 2:
+    if len(strong_contradictions) >= 2:
         return "ABSTAIN"
 
-    # ---------------------------------------------------------
-    # 2. Identify strong supporting evidence
-    # ---------------------------------------------------------
-
-    strong_entailments = [
-        chunk
-        for chunk in evaluated_chunks
-        if chunk["entailment"] >= ENTAILMENT_THRESHOLD
+    # 2. Check for strong supporting evidence (ANSWER)
+    valid_answers = [
+        chunk for chunk in evaluated_chunks
+        if chunk["entailment"] >= ENTAILMENT_THRESHOLD and chunk["contradiction"] < 0.30
     ]
 
-    if strong_entailments:
+    if valid_answers:
         return "ANSWER"
 
-    # ---------------------------------------------------------
-    # 3. Evidence is insufficient
-    # ---------------------------------------------------------
-
     return "CLARIFY"
+
+
 def run_diagnostic(hypothesis, embedding_model, nli_model, collection):
     """Run retrieval + NLI verification + three-way routing."""
-
     print(f"\n[?] Hypothesis: {hypothesis}")
-
     print("\n[*] Retrieving evidence...")
 
     evidence = retrieve_evidence(
@@ -184,8 +180,18 @@ def run_diagnostic(hypothesis, embedding_model, nli_model, collection):
         collection
     )
 
-    print(f"[+] Retrieved {len(evidence)} evidence chunks.")
+    # SHORT-CIRCUIT: If ChromaDB only returned garbage, skip NLI and instantly clarify
+    if not evidence:
+        print("[-] No highly relevant evidence found in the database. Routing to CLARIFY.")
+        decision = "CLARIFY"
+        print(f"\n[DECISION] {decision}")
+        return {
+            "hypothesis": hypothesis,
+            "decision": decision,
+            "evidence": []
+        }
 
+    print(f"[+] Retrieved {len(evidence)} highly relevant evidence chunks.")
     print("\n[*] Running NLI verification...")
 
     evaluated = evaluate_evidence(
@@ -197,14 +203,13 @@ def run_diagnostic(hypothesis, embedding_model, nli_model, collection):
     for i, chunk in enumerate(evaluated, 1):
         print(f"\nEvidence {i}: {chunk['id']}")
         print(f"  Distance:      {chunk['distance']:.4f}")
-        print(f"  Topic:         {chunk['metadata'].get('topic')}")
+        print(f"  Topic:         {chunk['metadata'].get('category')}")
         print(f"  Species:       {chunk['metadata'].get('species')}")
         print(f"  Contradiction: {chunk['contradiction']:.4f}")
         print(f"  Entailment:    {chunk['entailment']:.4f}")
         print(f"  Neutral:       {chunk['neutral']:.4f}")
 
     decision = make_decision(evaluated)
-
     print(f"\n[DECISION] {decision}")
 
     return {
@@ -213,8 +218,8 @@ def run_diagnostic(hypothesis, embedding_model, nli_model, collection):
         "evidence": evaluated
     }
 
-if __name__ == "__main__":
 
+if __name__ == "__main__":
     from intent_extractor import extract_hypothesis
 
     farmer_query = (
@@ -222,18 +227,16 @@ if __name__ == "__main__":
     )
 
     print("\n[*] Extracting diagnostic hypothesis with Qwen-0.5B...")
-
     hypothesis = extract_hypothesis(farmer_query)
-
     print(f"[+] Hypothesis: {hypothesis}")
 
     embedding_model, nli_model, collection = load_engine()
-
+    
     result = run_diagnostic(
         hypothesis,
         embedding_model,
         nli_model,
         collection
     )
-
+    
     print(f"\nFinal decision: {result['decision']}")

@@ -1,27 +1,43 @@
 import os
 import subprocess
 import json
-
+import platform
+import shutil
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 
-LLAMA_CLI = (
-    r"C:\Users\tanag\AppData\Local\Microsoft\WinGet\Packages"
-    r"\ggml.llamacpp_Microsoft.Winget.Source_8wekyb3d8bbwe"
-    r"\llama-cli.exe"
-)
+# 1. Multi-OS CLI Resolver
+def get_llama_cli():
+    if platform.system() == "Windows":
+        # Meghana's local Windows path
+        meghana_path = (
+            r"C:\Users\tanag\AppData\Local\Microsoft\WinGet\Packages"
+            r"\ggml.llamacpp_Microsoft.Winget.Source_8wekyb3d8bbwe\llama-cli.exe"
+        )
+        if os.path.exists(meghana_path):
+            return meghana_path
+        return shutil.which("llama-cli.exe") or "llama-cli.exe"
+    else:
+        # Khushi's Mac/Linux path
+        return shutil.which("llama-cli") or "llama-cli"
+
+LLAMA_CLI = get_llama_cli()
 
 MODEL_PATH = os.path.join(
     PROJECT_ROOT,
     "models",
-    "qwen2.5-1.5b",
-    "qwen2.5-1.5b-instruct-q4_k_m.gguf"
+    "qwen-2.5-1.5b-instruct.gguf"
 )
 
 GRAMMAR_PATH = os.path.join(
     PROJECT_ROOT,
     "constraints.gbnf"
+)
+
+PROMPT_CACHE_PATH = os.path.join(
+    PROJECT_ROOT, 
+    "prompt.cache"
 )
 
 
@@ -82,18 +98,14 @@ The output must contain exactly these fields:
 
     command = [
         LLAMA_CLI,
-        "-m",
-        MODEL_PATH,
-        "-p",
-        prompt,
-        "-n",
-        "100",
+        "-m", MODEL_PATH,
+        "-p", prompt,
+        "-n", "256",
+        "-ngl", "99",                         # 2. GPU Offload: Forces max layers to Metal/CUDA
         "--no-display-prompt",
-        "--single-turn",
-        "--grammar-file",
-        GRAMMAR_PATH,
-        "--temp",
-        "0"
+        "--grammar-file", GRAMMAR_PATH,
+        "--prompt-cache", PROMPT_CACHE_PATH, 
+        "--temp", "0"
     ]
 
     result = subprocess.run(
@@ -106,7 +118,6 @@ The output must contain exactly these fields:
 
     output = result.stdout or ""
 
-    # Extract JSON from llama.cpp output.
     if "{" in output and "}" in output:
         output = output[
             output.find("{"):output.rfind("}") + 1
@@ -117,11 +128,9 @@ The output must contain exactly these fields:
     # ---------------------------------------------------------
     # Validate and sanitize model output
     # ---------------------------------------------------------
-
     try:
         data = json.loads(output)
 
-        # Always select the strongest NLI-supported evidence.
         best_evidence = max(
             evidence,
             key=lambda item: item.get("entailment", 0.0)
@@ -133,14 +142,12 @@ The output must contain exactly these fields:
             data.get("recommended_action_telugu", "")
         )
 
-        # Count Telugu Unicode characters.
         telugu_chars = sum(
             1
             for ch in telugu
             if "\u0C00" <= ch <= "\u0C7F"
         )
 
-        # Reject empty/corrupted Telugu output.
         if telugu_chars < 5:
             data["recommended_action_telugu"] = (
                 "ఇచ్చిన ఆధారాల్లో నిర్దిష్ట చర్య సూచించబడలేదు."
@@ -158,8 +165,6 @@ The output must contain exactly these fields:
         )
 
     except (json.JSONDecodeError, TypeError, ValueError):
-
-        # Deterministic safe fallback.
         best_evidence = max(
             evidence,
             key=lambda item: item.get("entailment", 0.0)
@@ -200,16 +205,6 @@ if __name__ == "__main__":
             "metadata": {},
             "distance": 0.8652,
             "entailment": 0.9982
-        },
-        {
-            "id": "CHK-00505",
-            "text": (
-                "Stocking density affects shrimp growth, "
-                "survival and yield."
-            ),
-            "metadata": {},
-            "distance": 0.8930,
-            "entailment": 0.9995
         }
     ]
 

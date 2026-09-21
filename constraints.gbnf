@@ -1,10 +1,5 @@
 root ::= "{" ws "\"evidence_chunk_id\"" ws ":" ws string "," ws "\"parameter_identified\"" ws ":" ws string "," ws "\"recommended_action_telugu\"" ws ":" ws string ws "}"
 
-string ::= "\"" characters "\""
-
-characters ::= character*
-character ::= [^"\\] | "\\" escape
-
-escape ::= "\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t"
-
-ws ::= [ \t\n\r]*
+ws ::= [ \t\n]*
+string ::= "\"" string-char* "\""
+string-char ::= [^"\\] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F])

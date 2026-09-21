@@ -15,13 +15,13 @@ RAW_PDFS_DIR = "./data/raw_pdfs"
 PROCESSED_DATA_DIR = "./data/processed"
 CHROMA_DB_DIR = "./data/chroma_db"
 CHUNKS_PATH = os.path.join(PROCESSED_DATA_DIR, "chunks.json")
-
+MIN_WORDS = 8      # Blocks single-line headers and tiny orphan fragments
+MIN_CHARS = 40     # Blocks short punctuation-heavy artifacts
 MAX_WORDS = 50
 
 
 def word_count(text):
     return len(re.findall(r"\S+", text))
-
 
 def split_into_bounded_chunks(text, max_words=MAX_WORDS):
     text = re.sub(r"\s+", " ", text).strip()
@@ -42,13 +42,16 @@ def split_into_bounded_chunks(text, max_words=MAX_WORDS):
 
         if len(sentence_words) > max_words:
             if current_words:
-                chunks.append(" ".join(current_words))
+                chunk_text = " ".join(current_words)
+                # Apply quality filter before appending
+                if len(chunk_text.split()) >= MIN_WORDS and len(chunk_text) >= MIN_CHARS:
+                    chunks.append(chunk_text)
                 current_words = []
 
             for start in range(0, len(sentence_words), max_words):
-                chunks.append(
-                    " ".join(sentence_words[start:start + max_words])
-                )
+                sub_chunk = " ".join(sentence_words[start:start + max_words])
+                if len(sub_chunk.split()) >= MIN_WORDS and len(sub_chunk) >= MIN_CHARS:
+                    chunks.append(sub_chunk)
 
             continue
 
@@ -56,15 +59,18 @@ def split_into_bounded_chunks(text, max_words=MAX_WORDS):
             current_words.extend(sentence_words)
         else:
             if current_words:
-                chunks.append(" ".join(current_words))
+                chunk_text = " ".join(current_words)
+                if len(chunk_text.split()) >= MIN_WORDS and len(chunk_text) >= MIN_CHARS:
+                    chunks.append(chunk_text)
 
             current_words = sentence_words.copy()
 
     if current_words:
-        chunks.append(" ".join(current_words))
+        chunk_text = " ".join(current_words)
+        if len(chunk_text.split()) >= MIN_WORDS and len(chunk_text) >= MIN_CHARS:
+            chunks.append(chunk_text)
 
     return chunks
-
 
 def classify_category(text):
     lower_text = text.lower()
