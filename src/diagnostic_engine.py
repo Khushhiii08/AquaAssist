@@ -22,6 +22,10 @@ ENTAILMENT_THRESHOLD = 0.75
 NEUTRAL_THRESHOLD = 0.40
 CONTRADICTION_THRESHOLD = 0.30
 
+# --- HARDWARE ACCELERATION SELECTOR ---
+# Automatically detects Apple Silicon (MPS), NVIDIA CUDA, or falls back to CPU
+DEVICE = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
+
 # NEW: Retrieval Quality Filter (Lower distance = better match. 0.80 is a strict cutoff for BGE-M3)
 MAX_DISTANCE_THRESHOLD = 0.80
 
@@ -58,10 +62,10 @@ def detect_conflicting_measurements(farmer_query):
 def load_engine():
     """Load BGE-M3, fine-tuned DeBERTa, and ChromaDB."""
     print("[*] Loading BGE-M3...")
-    embedding_model = SentenceTransformer(EMBEDDING_MODEL)
+    embedding_model = SentenceTransformer(EMBEDDING_MODEL, device=DEVICE)
 
     print("[*] Loading fine-tuned DeBERTa...")
-    nli_model = CrossEncoder(NLI_MODEL_PATH)
+    nli_model = CrossEncoder(NLI_MODEL_PATH, device=DEVICE)
 
     print("[*] Connecting to ChromaDB...")
     client = chromadb.PersistentClient(path=DB_PATH)
