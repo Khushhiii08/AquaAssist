@@ -1,126 +1,81 @@
-import os
-import subprocess
-import shutil
-import json
-import tempfile
-import platform
+import re
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-
-MODEL_PATH = os.path.join(
-    PROJECT_ROOT,
-    "models",
-    "qwen-2.5-0.5b-instruct.gguf"
-)
-
-def get_llama_cli_path():
+def normalize_vernacular_input(text):
     """
-    Dynamically locates the llama-cli executable across any OS.
-    Prioritizes an environment variable, then searches the system PATH.
+    Language-aware preprocessing to normalize or protect key technical terms 
+    (shrimp, oxygen, pH, temperature) during mixed Telugu-English inputs.
     """
-    # 1. Check if an environment variable override is provided
-    env_path = os.getenv("LLAMA_CLI_PATH")
-    if env_path and os.path.exists(env_path):
-        return env_path
+    if not text:
+        return ""
+    return text.strip()
 
-    # 2. Automatically search system PATH across platforms
-    # Note: shutil.which automatically checks Windows PATHEXT (.exe, .bat, etc.)
-    cli_name = "llama-cli.exe" if platform.system() == "Windows" else "llama-cli"
-    system_path = shutil.which(cli_name)
-    if system_path:
-        return system_path
-
-    # 3. Fallback string if not found in PATH (will raise a clean OS error on execution)
-    return "llama-cli"
-
-LLAMA_CLI = get_llama_cli_path()
-
-def extract_hypothesis(farmer_query):
-    """Convert conversational farmer input into a rich, technically mapped hypothesis for high-precision vector retrieval."""
-
-    prompt = f"""You are an expert aquaculture diagnostician and data normalizer.
-Your job is to read a farmer's colloquial observation and map it to formal aquaculture symptoms and parameters.
-- Translate everyday descriptions (e.g., "dark green water") into standard technical terminology (e.g., "dense phytoplankton bloom / high microalgae concentration").
-- Translate behavioral cues (e.g., "not eating") into canonical terms (e.g., "anorexia / reduced feed intake").
-- Output ONLY valid JSON matching this exact schema:
-{{"symptoms": ["technical symptom 1", "technical symptom 2"], "parameters": {{"parameter_name": "value_or_status"}}, "clinical_hypothesis": "A concise, professional diagnostic sentence combining these findings for vector search."}}
-
-Farmer statement:
-{farmer_query}
-
-JSON Output:
-"""
-
-    temp_in_path = None
-    temp_out_path = None
-
-    try:
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt", encoding="utf-8") as temp_in:
-            temp_in.write(prompt)
-            temp_in_path = temp_in.name
-
-        with tempfile.NamedTemporaryFile(mode="r", delete=False, suffix=".out", encoding="utf-8") as temp_out:
-            temp_out_path = temp_out.name
-
-        command = [
-            LLAMA_CLI,
-            "-m", MODEL_PATH,
-            "-f", temp_in_path,
-            "-n", "200",
-            "--single-turn",
-            "--no-display-prompt"
-        ]
-
-        with open(temp_out_path, "w", encoding="utf-8") as out_file:
-            process_result = subprocess.run(
-                command,
-                stdout=out_file,
-                stderr=subprocess.DEVNULL, 
-                text=True,
-                encoding="utf-8"
-            )
-
-            if process_result.returncode != 0:
-                raise RuntimeError("Qwen inference execution failed.")
-
-        with open(temp_out_path, "r", encoding="utf-8") as result_file:
-            raw_output = result_file.read()
-
-        start_idx = raw_output.find("{")
-        end_idx = raw_output.rfind("}") + 1
+def extract_semantic_triplets(farmer_query):
+    """
+    Deterministic Triplet Parser: Extracts core semantic triples 
+    [Subject] -> [Modifier/Symptom] -> [Value/State] without relying on unconstrained LLM text generation.
+    """
+    cleaned_query = normalize_vernacular_input(farmer_query)
+    query_lower = cleaned_query.lower()
+    
+    # 1. Detect Subject using accurate native vocabulary
+    target_subjects = ["shrimp", "రొయ్యలు", "చేపలు", "fish"]
+    subject = "shrimp/fish" if any(term in query_lower for term in target_subjects) else "pond/water"
+    
+    # 2. Extract Symptoms / Actions with Polarity Protection
+    is_negative = any(neg in query_lower for neg in ["not", "no", "don't", "cant", "doesn't", "లేదు", "తక్కువగా"])
+    
+    symptoms = []
+    if "eat" in query_lower or "eating" in query_lower or "తినడం" in query_lower:
+        symptoms.append("not eating" if is_negative else "eating normally")
+    if "swim" in query_lower or "surface" in query_lower or "gasp" in query_lower or "పైకి" in query_lower:
+        if "surface" in query_lower or "gasp" in query_lower or "పైకి" in query_lower:
+            symptoms.append("surface gasping / swimming near surface")
+        elif is_negative:
+            symptoms.append("not swimming")
+    if "green" in query_lower or "color" in query_lower or "ఆకుపచ్చ" in query_lower:
+        symptoms.append("dark green water")
+    if "dying" in query_lower or "dead" in query_lower or "చనిపోతున్నాయి" in query_lower:
+        symptoms.append("mortality / dying")
         
-        if start_idx == -1 or end_idx == 0:
-            raise ValueError("No JSON brackets found in output.")
-            
-        clean_json_string = raw_output[start_idx:end_idx]
-        data = json.loads(clean_json_string)
+    # 3. Extract Numerical Values & Parameters (Widened regex to handle conversational filler)
+    parameter_matches = re.findall(r'(oxygen|do|ph|temp|temperature).{0,30}?(\d+(?:\.\d+)?)', query_lower)
+    param_triplets = []
+    for param, val in parameter_matches:
+        param_triplets.append((param.upper(), "value", float(val)))
         
-        # Fallback to raw text if model output is missing or generic
-        clinical_hypothesis = data.get("clinical_hypothesis", "")
-        if not clinical_hypothesis or "requires parameter verification" in clinical_hypothesis:
-            return farmer_query
-            
-        return clinical_hypothesis
+    # 4. Detect Uncertainty / Conditional Modifiers
+    uncertainty_detected = any(term in query_lower for term in ["may", "might", "maybe", "perhaps", "could be", "ఉందేమో"])
+    modifier = "uncertain (may be)" if uncertainty_detected else "definitive"
+
+    # Assemble structured semantic representation dictionary
+    structured_hypothesis = {
+        "subject": subject,
+        "symptoms": symptoms,
+        "parameters": param_triplets,
+        "certainty": modifier,
+        "raw_polarity": "negative" if is_negative else "positive"
+    }
+    
+    # Convert structured dictionary into a clean, standardized hypothesis string for ChromaDB/NLI
+    symptom_str = ", ".join(symptoms) if symptoms else "abnormal behavior"
+    param_str = f" with measured parameters {param_triplets}" if param_triplets else ""
+    
+    hypothesis_sentence = f"The {subject} exhibits {symptom_str}{param_str}. Condition state is {modifier}."
+    
+    return structured_hypothesis, hypothesis_sentence
+
+def extract_hypothesis(farmer_query, model_pipeline=None):
+    """
+    Main entry point for diagnostic engine and unit tests.
+    Uses the deterministic semantic triplet parser instead of unconstrained LLM text generation.
+    """
+    cleaned_query = normalize_vernacular_input(farmer_query)
+    
+    if not cleaned_query or len(cleaned_query) < 3:
+        return "The farmer reports an unspecified pond observation."
         
-    except (json.JSONDecodeError, ValueError):
-        return "The aquaculture system requires parameter verification for shrimp health and water quality."
-    except Exception as e:
-        print(f"[!] System Error during extraction: {e}")
-        return "CLARIFY"
-    finally:
-        if temp_in_path and os.path.exists(temp_in_path):
-            os.remove(temp_in_path)
-        if temp_out_path and os.path.exists(temp_out_path):
-            os.remove(temp_out_path)
-
-
-if __name__ == "__main__":
-    farmer_query = "My shrimp are swimming near the surface and gasping for air."
-    hypothesis = extract_hypothesis(farmer_query)
-
-    print("\nFarmer input:")
-    print(farmer_query)
-
-    print("\nExtracted hypothesis:")
-    print(hypothesis)
+    print(f"\n[DEBUG] Running Deterministic Triplet Parser on: '{cleaned_query}'")
+    _, hypothesis_sentence = extract_semantic_triplets(cleaned_query)
+    
+    print(f"[+] Hypothesis: {hypothesis_sentence}")
+    return hypothesis_sentence

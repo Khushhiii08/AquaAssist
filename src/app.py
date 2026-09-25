@@ -1,15 +1,40 @@
 import os
+import re
 import streamlit as st
 import json
+import shutil
+import glob
 from gtts import gTTS
+from sync_manager import download_and_apply_ota_update
+import subprocess
+import sys
 from response_generator import generate_answer
 from diagnostic_engine import load_engine, run_diagnostic, detect_conflicting_measurements
 from intent_extractor import extract_hypothesis
 from decision_response import get_decision_response
 from whisper_transcriber import transcribe_audio
 
+def cleanup_temp_files():
+    """Wipes old TTS and Whisper audio files on boot to prevent storage leaks."""
+    # 1. Nuke and recreate the TTS folder
+    if os.path.exists("temp_audio"):
+        shutil.rmtree("temp_audio")
+    os.makedirs("temp_audio", exist_ok=True)
+    
+    # 2. Delete any leftover Whisper WAV files in the root directory
+    for wav_file in glob.glob("temp_farmer_audio*.wav"):
+        try:
+            os.remove(wav_file)
+        except OSError:
+            pass
+
+# Run cleanup ONLY on the very first load of the session
+if "cleanup_done" not in st.session_state:
+    cleanup_temp_files()
+    st.session_state.cleanup_done = True
+
 def text_to_speech_file(text, filename="response_audio.mp3"):
-    """Generates a stable audio file using gTTS for flawless browser playback."""
+    """Generates a stable audio file, isolating the target language to save time."""
     try:
         os.makedirs("temp_audio", exist_ok=True)
         file_path = os.path.join("temp_audio", filename)
@@ -17,10 +42,21 @@ def text_to_speech_file(text, filename="response_audio.mp3"):
         # Clean text for speech (skip markdown symbols)
         clean_text = text.replace("*", "").replace("#", "").replace("⚠️", "")
         
-        # Default to Telugu ('te') if Telugu script is present, otherwise English ('en')
-        lang = 'te' if any('\u0c00' <= c <= '\u0c7f' for c in clean_text) else 'en'
+        # Isolate sentences that contain Telugu script
+        telugu_lines = [
+            line for line in clean_text.split('\n') 
+            if any('\u0c00' <= c <= '\u0c7f' for c in line)
+        ]
         
-        tts = gTTS(text=clean_text, lang=lang, slow=False)
+        # If Telugu is present, ONLY read the Telugu portion. Otherwise, read English.
+        if telugu_lines:
+            speech_text = " ".join(telugu_lines)
+            lang = 'te'
+        else:
+            speech_text = clean_text
+            lang = 'en'
+            
+        tts = gTTS(text=speech_text, lang=lang, slow=False)
         tts.save(file_path)
         
         if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
@@ -76,15 +112,21 @@ with st.sidebar:
     st.markdown("**System Status & Sync**")
     st.info("🟢 Mode: Local-First (Offline Ready)")
     
-    from sync_manager import check_for_updates
     if st.button("🔄 Check Knowledge Updates", use_container_width=True):
-        with st.spinner("Checking connectivity and sync manifest..."):
-            has_update, msg = check_for_updates()
-            if has_update:
+        with st.spinner("Checking connectivity and syncing OTA updates..."):
+            
+            # For capstone demo, host a zipped version of the data/chroma_db folder 
+            # on GitHub, Google Drive (direct link), or an AWS S3 bucket, and paste the URL here:
+            CLOUD_DB_URL = "https://github.com/Khushhiii08/AquaAssist/releases/download/v1.1-data/chroma_db.zip"
+            
+            success, msg = download_and_apply_ota_update(CLOUD_DB_URL)
+            
+            if success:
                 st.success(msg)
-                # Here you can trigger your ingestion script or delta download
+                # Force Streamlit to reload ChromaDB so it sees the new data
+                get_diagnostic_engine.clear()
             else:
-                st.info(msg)
+                st.error(msg)
 
 # Link active messages list to the selected session
 st.session_state.messages = current_session["messages"]
@@ -106,14 +148,23 @@ for message in st.session_state.messages:
 prompt = st.chat_input("Describe pond symptoms or record voice...", accept_audio=True)
 farmer_query = None
 
+def contains_telugu_script(text):
+    """Checks if the typed string contains characters from the Telugu Unicode block."""
+    return bool(re.search(r'[\u0C00-\u0C7F]', text))
+
 if prompt:
     if prompt.text and prompt.text.strip():
-        farmer_query = prompt.text.strip()
+        # Edge Hardware Guardrail: Reject typed Telugu to save translation compute
+        if contains_telugu_script(prompt.text):
+            st.warning("⚠️ For Telugu support, please click the 🎙️ microphone icon to record your voice. Typed text is currently English-only.")
+        else:
+            farmer_query = prompt.text.strip()
+            
     elif prompt.audio is not None:
         audio_path = "temp_farmer_audio.wav"
         with open(audio_path, "wb") as f:
             f.write(prompt.audio.getbuffer())
-        with st.spinner("Transcribing local audio via Whisper..."):
+        with st.spinner("Transcribing and translating local audio..."):
             farmer_query = transcribe_audio(audio_path)
 
 # --- PIPELINE EXECUTION ---
@@ -125,16 +176,16 @@ if farmer_query:
     with st.chat_message("user"):
         st.markdown(farmer_query)
     st.session_state.messages.append({"role": "user", "content": farmer_query})
-    
-    recent_history = st.session_state.messages[-5:-1]
-    context_string = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in recent_history])
-    enriched_query = f"Previous Context:\n{context_string}\n\nFarmer's Current Statement: {farmer_query}" if context_string else farmer_query
 
     with st.chat_message("assistant"):
         if detect_conflicting_measurements(farmer_query):
-            ui_response = "⚠️ **Safety Warning:** I detected contradictory water measurements in your input. Please recalibrate your sensors and provide the correct value."
+            english_warning = "⚠️ **Safety Warning:** I detected contradictory water measurements in your input. Please recalibrate your sensors and provide the correct value."
+            telugu_warning = "**Telugu Advice:** ⚠️ **భద్రతా హెచ్చరిక:** మీ సమాచారంలో విరుద్ధమైన నీటి కొలతలు ఉన్నట్లు నేను గుర్తించాను. దయచేసి మీ సెన్సార్లను సరిచూసుకుని, సరైన విలువను అందించండి."
+            
+            ui_response = f"{english_warning}\n\n{telugu_warning}"
             st.markdown(ui_response)
             
+            # The TTS engine will automatically isolate and speak the Telugu line
             audio_path = text_to_speech_file(ui_response, filename=f"msg_{hash(ui_response) & 0xffffffff}.mp3")
             if audio_path:
                 st.audio(audio_path, format="audio/mp3")
@@ -143,10 +194,8 @@ if farmer_query:
             
         else:
             with st.spinner("Analyzing telemetry & retrieving evidence..."):
-                if any(char.isdigit() for char in farmer_query) and ("do" in farmer_query.lower() or "oxygen" in farmer_query.lower() or "ph" in farmer_query.lower()):
-                    hypothesis = farmer_query
-                else:
-                    hypothesis = extract_hypothesis(enriched_query)
+                # Always run the deterministic parser strictly on the isolated current turn
+                hypothesis = extract_hypothesis(farmer_query)
                 
                 embedding_model, nli_model, collection = get_diagnostic_engine()
                 result = run_diagnostic(hypothesis, embedding_model, nli_model, collection)
@@ -159,12 +208,16 @@ if farmer_query:
                 elif decision == "ABSTAIN":
                     ui_response = get_decision_response("ABSTAIN")["message"]
                 elif decision == "ANSWER":
-                    raw_final_response = generate_answer(hypothesis, result["evidence"])
-                    try:
-                        parsed_data = json.loads(raw_final_response)
-                        ui_response = parsed_data.get("recommended_action_telugu", raw_final_response)
-                    except (json.JSONDecodeError, TypeError):
-                        ui_response = raw_final_response
+                    # 1. Get structured bilingual response directly from the metadata router
+                    response_data = generate_answer(hypothesis, result["evidence"])
+                    
+                    # 2. Unpack the clean strings
+                    english_text = response_data["english"]
+                    telugu_text = response_data["telugu"]
+
+                    # 3. Render the bilingual UX smoothly
+                    # (Your text_to_speech_file function will automatically isolate the Telugu line!)
+                    ui_response = f"**English Observation:** {english_text}\n\n**Telugu Advice:** {telugu_text}"
 
             st.markdown(ui_response)
             
@@ -175,8 +228,8 @@ if farmer_query:
             st.session_state.messages.append({"role": "assistant", "content": ui_response})
 
             with st.expander("🛠️ Pipeline Debug Logs (For Engineering Team)"):
-                st.write(f"**Enriched Query to Extractor:**\n{enriched_query}")
-                st.write(f"**Extracted Hypothesis:**\n{hypothesis}")
+                st.write(f"**Raw Farmer Query:**\n{farmer_query}")
+                st.write(f"**Structured Hypothesis:**\n{hypothesis}")
                 st.write("**NLI Verification Results:**")
                 for chunk in result.get("evidence", []):
                     st.text(

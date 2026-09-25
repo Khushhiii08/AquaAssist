@@ -1,57 +1,38 @@
-# Python / Virtual Environments
+# Python environments & cache
 venv/
-ENV/
-env/
+.venv/
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+*.pyc
 
-# Environment Variables & Secrets
-.env
-.streamlit/secrets.toml
+# Mac OS files
+.DS_Store
 
-# Local Model Weights & Safetensors (Preventing gigabyte-scale commits)
+# Data & Databases
+data/raw_pdfs/
+data/chroma_db/
+data/processed/
+data/evaluation/
+*.zip
+
+# Machine Learning Models (Heavy weights - strictly blocked)
 models/
-*.safetensors
 *.gguf
 *.bin
+*.safetensors
 *.pt
 
-# Temporary Audio Artifacts & Cache
+# Audio & Media
 temp_audio/
-*.mp3
 *.wav
+*.mp3
 
-# IDE / Editor Files
-.vscode/
-.idea/
-*.swp
-*.swo
+# Local Experimental Scripts & Sandboxes
+testing/
 
-# OS Generated Files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
+# OS-Specific Compiled Binaries
+bin/
+
+# Local Test Outputs, Spreadsheets, & Logs
+retrieval_output.txt
+*.xlsx
+*.csv

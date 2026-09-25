@@ -1,25 +1,42 @@
 import os
-import json
+import shutil
 import requests
+import zipfile
+import tempfile
 
-VERSION_FILE = "data/knowledge_version.json"
-
-REMOTE_VERSION_URL = "https://github.com/Khushhiii08/AquaAssist/blob/main/data/version.json"
-def check_for_updates():
-    """Checks remote manifest for new aquaculture guidelines if internet is available."""
+def download_and_apply_ota_update(download_url):
+    """
+    Simulates a production edge update by downloading a pre-computed 
+    ChromaDB from a centralized cloud source and replacing the local DB.
+    """
+    target_db_path = os.path.join("./data", "chroma_db")
+    
     try:
-        # Quick connectivity check with a 3-second timeout
-        response = requests.get(REMOTE_VERSION_URL, timeout=3)
-        if response.status_code == 200:
-            # For a real deployment, you would check remote_data.get("version")
-            # Here we verify live internet connectivity successfully:
-            local_version = 1.0
-            if os.path.exists(VERSION_FILE):
-                with open(VERSION_FILE, "r") as f:
-                    local_version = json.load(f).get("version", 1.0)
+        # Create a temporary directory to handle the download safely
+        with tempfile.TemporaryDirectory() as temp_dir:
+            zip_path = os.path.join(temp_dir, "update.zip")
             
-            # Simulated check: If online, we can report status
-            return True, f"Connected! Knowledge base is up to date (v{local_version})."
-        return False, "Offline mode: Running on local vector store."
+            # 1. Download the new database
+            response = requests.get(download_url, stream=True)
+            response.raise_for_status()
+            with open(zip_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                    
+            # 2. Extract to temp folder
+            extract_path = os.path.join(temp_dir, "extracted")
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_path)
+                
+            # 3. Safely swap the old DB with the new one
+            if os.path.exists(target_db_path):
+                shutil.rmtree(target_db_path)
+            
+            # Move the extracted chroma_db folder into the data directory
+            # (Assumes the zip contains the chroma_db folder directly)
+            extracted_db = os.path.join(extract_path, "chroma_db")
+            shutil.move(extracted_db, target_db_path)
+            
+        return True, "✅ Knowledge base updated successfully from cloud!"
     except Exception as e:
-        return False, "Offline mode: No internet connection detected. Operating locally."
+        return False, f"Failed to apply OTA update. Error: {e}"

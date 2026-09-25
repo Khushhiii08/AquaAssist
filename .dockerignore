@@ -1,0 +1,9 @@
+.git
+__pycache__/
+venv/
+.venv/
+data/raw_pdfs/
+temp_audio/
+*.wav
+*.mp3
+.DS_Store

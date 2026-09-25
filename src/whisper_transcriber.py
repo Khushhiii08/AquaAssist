@@ -1,37 +1,25 @@
-from faster_whisper import WhisperModel
+import whisper
+import torch
 
+# Hardware acceleration for edge/local testing
+DEVICE = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
 
-MODEL_SIZE = "tiny"
-
-
-_model = None
-
-
-def load_whisper():
-    global _model
-
-    if _model is None:
-        _model = WhisperModel(
-            MODEL_SIZE,
-            device="cpu",
-            compute_type="int8"
-        )
-
-    return _model
-
+print(f"[*] Loading Whisper 'base' model on {DEVICE}...")
+model = whisper.load_model("base", device=DEVICE)
 
 def transcribe_audio(audio_path):
-    model = load_whisper()
-
-    segments, info = model.transcribe(
-        audio_path,
-        language="te",
-        beam_size=5
-    )
-
-    text = " ".join(
-        segment.text.strip()
-        for segment in segments
-    ).strip()
-
-    return text
+    """
+    Task 2.1: Multimodal Normalization.
+    Directly translates Telugu farmer audio into an English text query.
+    """
+    try:
+        result = model.transcribe(
+            audio_path,
+            language="te",        # Optimize for Telugu acoustics
+            task="translate",     # Instantly output English text
+            fp16=False            # Safe fallback for edge hardware
+        )
+        return result["text"].strip()
+    except Exception as e:
+        print(f"[!] Whisper Transcription Error: {e}")
+        return ""
