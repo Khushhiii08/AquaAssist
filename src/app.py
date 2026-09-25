@@ -195,7 +195,8 @@ if farmer_query:
         else:
             with st.spinner("Analyzing telemetry & retrieving evidence..."):
                 # Always run the deterministic parser strictly on the isolated current turn
-                hypothesis = extract_hypothesis(farmer_query)
+                # Pass st.session_state.messages so the parser knows what was discussed previously
+                hypothesis = extract_hypothesis(farmer_query, chat_history=st.session_state.messages)
                 
                 embedding_model, nli_model, collection = get_diagnostic_engine()
                 result = run_diagnostic(hypothesis, embedding_model, nli_model, collection)

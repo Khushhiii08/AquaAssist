@@ -64,18 +64,24 @@ def extract_semantic_triplets(farmer_query):
     
     return structured_hypothesis, hypothesis_sentence
 
-def extract_hypothesis(farmer_query, model_pipeline=None):
+def extract_hypothesis(farmer_query, chat_history=None):
     """
-    Main entry point for diagnostic engine and unit tests.
-    Uses the deterministic semantic triplet parser instead of unconstrained LLM text generation.
+    Deterministic Triplet Parser with light context-inheritance for follow-ups.
     """
     cleaned_query = normalize_vernacular_input(farmer_query)
+    query_lower = cleaned_query.lower()
     
-    if not cleaned_query or len(cleaned_query) < 3:
-        return "The farmer reports an unspecified pond observation."
-        
-    print(f"\n[DEBUG] Running Deterministic Triplet Parser on: '{cleaned_query}'")
-    _, hypothesis_sentence = extract_semantic_triplets(cleaned_query)
+    # If the user's query is short (e.g. "2.0" or "it is 2 mg/L") and we have history, 
+    # inherit the context from the last assistant question / user statement.
+    effective_query = cleaned_query
+    if chat_history and len(cleaned_query.split()) < 5:
+        # Grab the last user message to see what symptom was being tracked
+        last_user_msgs = [msg["content"] for msg in chat_history if msg["role"] == "user"]
+        if last_user_msgs:
+            effective_query = f"{last_user_msgs[-1]} and {cleaned_query}"
+
+    print(f"\n[DEBUG] Running Deterministic Triplet Parser on: '{effective_query}'")
+    _, hypothesis_sentence = extract_semantic_triplets(effective_query)
     
     print(f"[+] Hypothesis: {hypothesis_sentence}")
     return hypothesis_sentence
