@@ -5,7 +5,7 @@ import json
 import shutil
 import glob
 from gtts import gTTS
-from sync_manager import download_and_apply_ota_update
+from sync_manager import download_and_apply_ota_update, get_latest_github_release_url
 import subprocess
 import sys
 from response_generator import generate_answer
@@ -72,6 +72,10 @@ st.set_page_config(page_title="AquaAssist", page_icon="🐟", layout="centered")
 def get_diagnostic_engine():
     return load_engine()
 
+# --- INITIALIZE CONVERSATIONAL STATE ---
+if "diagnostic_state" not in st.session_state:
+    st.session_state.diagnostic_state = {"symptoms": set(), "pending_metric": None}
+
 # --- CHATGPT-STYLE SIDEBAR HISTORY ---
 with st.sidebar:
     st.image("https://img.icons8.com/color/96/fish.png", width=36)
@@ -88,6 +92,9 @@ with st.sidebar:
         new_id = len(st.session_state.sessions)
         st.session_state.sessions.insert(0, {"id": new_id, "title": "New Chat", "messages": []})
         st.session_state.current_session_id = new_id
+        
+        # Reset the slot-filling memory for the new chat
+        st.session_state.diagnostic_state = {"symptoms": set(), "pending_metric": None}
         st.rerun()
         
     st.markdown("---")
@@ -113,13 +120,12 @@ with st.sidebar:
     st.info("🟢 Mode: Local-First (Offline Ready)")
     
     if st.button("🔄 Check Knowledge Updates", use_container_width=True):
-        with st.spinner("Checking connectivity and syncing OTA updates..."):
+        with st.spinner("Downloading latest database directly from GitHub..."):
             
-            # For capstone demo, host a zipped version of the data/chroma_db folder 
-            # on GitHub, Google Drive (direct link), or an AWS S3 bucket, and paste the URL here:
-            CLOUD_DB_URL = "https://github.com/Khushhiii08/AquaAssist/releases/download/v1.1-data/chroma_db.zip"
+            # This 'latest/download' structure bypasses the 60/hr API limit entirely
+            MAGIC_URL = "https://github.com/Khushhiii08/AquaAssist/releases/latest/download/chroma_db.zip"
             
-            success, msg = download_and_apply_ota_update(CLOUD_DB_URL)
+            success, msg = download_and_apply_ota_update(MAGIC_URL)
             
             if success:
                 st.success(msg)
@@ -153,19 +159,30 @@ def contains_telugu_script(text):
     return bool(re.search(r'[\u0C00-\u0C7F]', text))
 
 if prompt:
+    # Handle Typed Text
     if prompt.text and prompt.text.strip():
-        # Edge Hardware Guardrail: Reject typed Telugu to save translation compute
         if contains_telugu_script(prompt.text):
             st.warning("⚠️ For Telugu support, please click the 🎙️ microphone icon to record your voice. Typed text is currently English-only.")
         else:
             farmer_query = prompt.text.strip()
             
+    # Handle Audio Recording (T5 Voice Flow Fix)
     elif prompt.audio is not None:
         audio_path = "temp_farmer_audio.wav"
+        
+        # 1. Immediately save the recorded buffer to disk
         with open(audio_path, "wb") as f:
             f.write(prompt.audio.getbuffer())
-        with st.spinner("Transcribing and translating local audio..."):
-            farmer_query = transcribe_audio(audio_path)
+            
+        # 2. Block the UI with a spinner so the user knows submission succeeded
+        with st.spinner("Transcribing vernacular audio locally..."):
+            transcribed_text = transcribe_audio(audio_path)
+            
+            # 3. Assign to farmer_query to trigger the pipeline block below
+            if transcribed_text:
+                farmer_query = transcribed_text
+            else:
+                st.error("Audio transcription failed. Please try speaking closer to the microphone.")
 
 # --- PIPELINE EXECUTION ---
 if farmer_query:
@@ -194,9 +211,14 @@ if farmer_query:
             
         else:
             with st.spinner("Analyzing telemetry & retrieving evidence..."):
-                # Always run the deterministic parser strictly on the isolated current turn
-                # Pass st.session_state.messages so the parser knows what was discussed previously
-                hypothesis = extract_hypothesis(farmer_query, chat_history=st.session_state.messages)
+                # Pass the living state object to the extractor
+                hypothesis, updated_state = extract_hypothesis(
+                    farmer_query, 
+                    session_state=st.session_state.diagnostic_state
+                )
+                
+                # Save the updated state
+                st.session_state.diagnostic_state = updated_state
                 
                 embedding_model, nli_model, collection = get_diagnostic_engine()
                 result = run_diagnostic(hypothesis, embedding_model, nli_model, collection)
@@ -205,6 +227,8 @@ if farmer_query:
                 ui_response = ""
 
                 if decision == "CLARIFY":
+                    # The system wants more info. Set the slot we are waiting for!
+                    st.session_state.diagnostic_state["pending_metric"] = "DO"
                     ui_response = get_decision_response("CLARIFY")["message"]
                 elif decision == "ABSTAIN":
                     ui_response = get_decision_response("ABSTAIN")["message"]
@@ -216,8 +240,12 @@ if farmer_query:
                     english_text = response_data["english"]
                     telugu_text = response_data["telugu"]
 
+                    # --- SAFETY CATCH FOR CORRUPTED RECORDS ---
+                    if "skip" in english_text.lower() or "skip" in telugu_text.lower():
+                        english_text = "Critical observation detected, but standard evidence was filtered. Check aeration and water quality immediately."
+                        telugu_text = "క్లిష్టమైన పరిస్థితి గుర్తించబడింది. దయచేసి వెంటనే ఏరేటర్లను ఆన్ చేసి నీటి నాణ్యతను తనిఖీ చేయండి."
+
                     # 3. Render the bilingual UX smoothly
-                    # (Your text_to_speech_file function will automatically isolate the Telugu line!)
                     ui_response = f"**English Observation:** {english_text}\n\n**Telugu Advice:** {telugu_text}"
 
             st.markdown(ui_response)
@@ -239,3 +267,4 @@ if farmer_query:
                         f"Neutral: {chunk['neutral']:.4f} | "
                         f"Contradiction: {chunk['contradiction']:.4f}"
                     )
+                st.write(f"**Active State:** {st.session_state.diagnostic_state}")

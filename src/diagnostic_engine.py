@@ -2,6 +2,7 @@ import os
 import re
 import torch
 import chromadb
+from chromadb.utils import embedding_functions
 from sentence_transformers import SentenceTransformer, CrossEncoder
 
 # Project paths
@@ -23,7 +24,7 @@ CONTRADICTION_THRESHOLD = 0.30
 
 # --- HARDWARE ACCELERATION SELECTOR ---
 # Automatically detects Apple Silicon (MPS), NVIDIA CUDA, or falls back to CPU
-DEVICE = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Retrieval Quality Filter (Lower distance = better match. 0.80 is a strict cutoff for BGE-M3)
 MAX_DISTANCE_THRESHOLD = 0.80
@@ -58,10 +59,15 @@ def detect_conflicting_measurements(farmer_query):
     return False
 
 def load_engine():
-    """Load BGE-M3, fine-tuned DeBERTa CrossEncoder, and ChromaDB."""
-    print("[*] Loading BGE-M3...")
-    embedding_model = SentenceTransformer(EMBEDDING_MODEL, device=DEVICE)
-
+    """
+    Initializes the embedding model, NLI router, and ChromaDB collection.
+    """
+    print("[*] Loading Diagnostic Routing Models...")
+    # Explicitly route the multi-vector M3 model to the CPU
+    embedding_model = embedding_functions.SentenceTransformerEmbeddingFunction(
+        model_name="BAAI/bge-m3",
+        device=DEVICE
+    )
     print("[*] Loading fine-tuned DeBERTa CrossEncoder...")
     nli_model = CrossEncoder(NLI_MODEL_PATH, device=DEVICE)
 
@@ -77,13 +83,11 @@ def retrieve_evidence(hypothesis, embedding_model, collection, top_k=5):
     Phase 3 Retrieval Quality Gate: Enforces strict BGE-M3 distance thresholds 
     and filters out low-content micro-chunks.
     """
-    embedding = embedding_model.encode(
-        [hypothesis],
-        normalize_embeddings=True
-    ).tolist()
+    # FIX: Call the Chroma embedding function directly with a list of strings
+    embeddings = embedding_model([hypothesis])
 
     results = collection.query(
-        query_embeddings=embedding,
+        query_embeddings=embeddings,
         n_results=top_k,
         include=["documents", "metadatas", "distances"]
     )
@@ -93,7 +97,23 @@ def retrieve_evidence(hypothesis, embedding_model, collection, top_k=5):
     for i in range(len(results["ids"][0])):
         distance = results["distances"][0][i]
         text = results["documents"][0][i]
+        metadata = results["metadatas"][0][i]
         
+        # --- NEW: Species Alignment Gate ---
+        user_q = hypothesis.lower()
+        # Check both the raw text and the synthesized english text
+        chunk_content = text.lower() + " " + metadata.get("english_synthesis", "").lower()
+        
+        # If farmer asks about shrimp, but the chunk is exclusively about fish, drop it
+        if "shrimp" in user_q and "fish" in chunk_content and "shrimp" not in chunk_content:
+            print(f"[!] Dropping chunk {results['ids'][0][i]} (Species mismatch: expected shrimp, found fish)")
+            continue
+            
+        # If farmer asks about fish, but the chunk is exclusively about shrimp, drop it
+        if "fish" in user_q and "shrimp" in chunk_content and "fish" not in chunk_content:
+            print(f"[!] Dropping chunk {results['ids'][0][i]} (Species mismatch: expected fish, found shrimp)")
+            continue
+
         # 1. Strict Distance Cutoff
         if distance > MAX_DISTANCE_THRESHOLD:  
             print(f"[!] Dropping low-relevance chunk {results['ids'][0][i]} (Distance: {distance:.4f} > {MAX_DISTANCE_THRESHOLD} threshold)")
@@ -107,7 +127,7 @@ def retrieve_evidence(hypothesis, embedding_model, collection, top_k=5):
         evidence.append({
             "id": results["ids"][0][i],
             "text": text,
-            "metadata": results["metadatas"][0][i],
+            "metadata": metadata,
             "distance": distance
         })
 
@@ -182,26 +202,36 @@ def make_decision(evaluated_chunks):
     return "CLARIFY"
 
 def run_diagnostic(hypothesis, embedding_model, nli_model, collection):
-    """Run retrieval + NLI verification + three-way routing."""
-    print(f"\n[?] Hypothesis: {hypothesis}")
-    print("\n[*] Retrieving evidence...")
+    print(f"\n[?] Input: {hypothesis}")
 
+    # 1. Intent Routing: Separate Information Requests from Diagnostic Symptoms
+    question_keywords = ["how", "what", "why", "method", "way", "steps", "procedure", "increase", "decrease"]
+    is_question = any(kw in hypothesis.lower() for kw in question_keywords)
+
+    print(f"[*] Pipeline Track: {'Informational (Pure RAG)' if is_question else 'Diagnostic (NLI Verified)'}")
+
+    # 2. Retrieve Evidence (BGE-M3 handles dense/sparse intents natively)
     evidence = retrieve_evidence(hypothesis, embedding_model, collection)
 
     if not evidence:
-        print("[-] No highly relevant evidence found in the database. Routing to CLARIFY.")
-        return {
-            "hypothesis": hypothesis,
-            "decision": "CLARIFY",
-            "evidence": []
-        }
+        print("[-] No highly relevant evidence found. Routing to CLARIFY.")
+        return {"hypothesis": hypothesis, "decision": "CLARIFY", "evidence": []}
 
-    print(f"[+] Retrieved {len(evidence)} highly relevant evidence chunks.")
-    print("\n[*] Running NLI verification...")
+    if is_question:
+        # 3. Informational Track: Bypass NLI completely. NLI cannot evaluate interrogatives.
+        # If the semantic retrieval distance is solid, immediately return the answer.
+        decision = "ANSWER" if evidence[0]["distance"] < 0.65 else "CLARIFY"
+        
+        # Inject dummy NLI scores so your response_generator.py UI doesn't crash
+        for chunk in evidence:
+            chunk.update({"entailment": 1.0, "contradiction": 0.0, "neutral": 0.0})
+        evaluated = evidence
+    else:
+        # 4. Diagnostic Track: Strict NLI CrossEncoder Verification for Symptoms
+        print("[*] Running NLI verification...")
+        evaluated = evaluate_evidence(hypothesis, evidence, nli_model)
+        decision = make_decision(evaluated)
 
-    evaluated = evaluate_evidence(hypothesis, evidence, nli_model)
-    decision = make_decision(evaluated)
-    
     print(f"\n[DECISION] {decision}")
 
     return {

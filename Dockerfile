@@ -14,6 +14,9 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Pre-download the Whisper base model so it never requires internet at runtime
+RUN python -c "import whisper; whisper.load_model('base')"
+
 # Copy the rest of the application code and the pre-computed ChromaDB
 COPY . .
 

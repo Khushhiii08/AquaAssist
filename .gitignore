@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 
 # Mac OS files
+__MACOSX/
 .DS_Store
 
 # Data & Databases
