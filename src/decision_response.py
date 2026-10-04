@@ -1,5 +1,3 @@
-# decision_response.py
-
 DECISION_RESPONSES = {
     "CLARIFY": {
         "message": (
@@ -12,7 +10,16 @@ DECISION_RESPONSES = {
     },
     "ABSTAIN": {
         "message": (
-            "📌 **Status: Safety Warning / హెచ్చరిక మరియు వైరుధ్యం**\n\n"
+            "🛑 **Status: Out of Domain / పరిధికి వెలుపల**\n\n"
+            "--- English ---\n"
+            "I can only assist with aquaculture, shrimp/fish health, and pond water quality issues. Please ask an aquaculture-related question.\n\n"
+            "--- తెలుగు (Telugu) ---\n"
+            "నేను ఆక్వాకల్చర్, రొయ్యలు/చేపల ఆరోగ్యం మరియు నీటి నాణ్యత సమస్యలకు మాత్రమే సహాయం చేయగలను. దయచేసి ఆక్వాకల్చర్ సంబంధిత ప్రశ్న అడగండి."
+        )
+    },
+    "CONFLICT": {
+        "message": (
+            "⚠️ **Status: Safety Warning / హెచ్చరిక మరియు వైరుధ్యం**\n\n"
             "--- English ---\n"
             "Warning: Conflicting or high-risk measurements detected. Please re-test your water parameters or consult an expert before taking action.\n\n"
             "--- తెలుగు (Telugu) ---\n"

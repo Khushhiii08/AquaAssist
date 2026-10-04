@@ -24,36 +24,48 @@ CONTRADICTION_THRESHOLD = 0.30
 
 # --- HARDWARE ACCELERATION SELECTOR ---
 # Automatically detects Apple Silicon (MPS), NVIDIA CUDA, or falls back to CPU
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DEVICE = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
 
 # Retrieval Quality Filter (Lower distance = better match. 0.80 is a strict cutoff for BGE-M3)
 MAX_DISTANCE_THRESHOLD = 0.80
 
 def detect_conflicting_measurements(farmer_query):
     """
-    Precise conflict detector.
-    Only triggers if multiple unique values exist for the *same* parameter.
+    Ultra-insensitive conflict detector.
+    Catches DO, D.O., D0, d.0, pH, P.H., P H, irrespective of case.
     """
-    text = farmer_query.lower()
+    # (?i) makes it completely case-insensitive.
+    # d[\.\s]*[o0] catches D followed by optional periods/spaces, then the letter O or number 0
+    do_pattern = r"(?i)(?:d[\.\s]*[o0]|dissolved oxygen|oxygen)[^\d]{0,25}(\d+(?:\.\d+)?)"
     
-    # Extract numbers near specific parameter labels
-    do_pattern = r"(?:do|dissolved oxygen|oxygen)[^\d]{0,25}(\d+(?:\.\d+)?)"
-    ph_pattern = r"\bph[^\d]{0,25}(\d+(?:\.\d+)?)"
+    # p[\.\s]*h catches P followed by optional periods/spaces, then H
+    ph_pattern = r"(?i)\bp[\.\s]*h[^\d]{0,25}(\d+(?:\.\d+)?)"
     
-    do_matches = re.findall(do_pattern, text)
-    ph_matches = re.findall(ph_pattern, text)
+    do_matches = re.findall(do_pattern, farmer_query)
+    ph_matches = re.findall(ph_pattern, farmer_query)
     
     do_values = set(float(val) for val in do_matches)
     ph_values = set(float(val) for val in ph_matches)
     
     conflicts = []
+    
+    # 1. Internal Contradiction Check
     if len(do_values) > 1:
-        conflicts.append(f"Dissolved Oxygen readings: {do_values}")
+        conflicts.append(f"Multiple DO readings: {do_values}")
     if len(ph_values) > 1:
-        conflicts.append(f"pH readings: {ph_values}")
+        conflicts.append(f"Multiple pH readings: {ph_values}")
         
+    # 2. Biological Boundary Check
+    for ph in ph_values:
+        if ph < 4.0 or ph > 11.0:
+            conflicts.append(f"Impossible pH: {ph}")
+            
+    for do_val in do_values:
+        if do_val > 20.0:
+            conflicts.append(f"Impossible DO: {do_val}")
+            
     if conflicts:
-        print(f"\n[!] CONFLICT GATE TRIGGERED: Contradictory measurements found for {', '.join(conflicts)}")
+        print(f"\n[!] CONFLICT GATE TRIGGERED: {', '.join(conflicts)}")
         return True
         
     return False
@@ -214,20 +226,28 @@ def run_diagnostic(hypothesis, embedding_model, nli_model, collection):
     evidence = retrieve_evidence(hypothesis, embedding_model, collection)
 
     if not evidence:
-        print("[-] No highly relevant evidence found. Routing to CLARIFY.")
-        return {"hypothesis": hypothesis, "decision": "CLARIFY", "evidence": []}
+        print("[-] No highly relevant evidence found (Out of Domain). Routing to ABSTAIN.")
+        # FIX: Return ABSTAIN instead of CLARIFY when the query is completely unrelated
+        return {"hypothesis": hypothesis, "decision": "ABSTAIN", "evidence": []}
 
     if is_question:
-        # 3. Informational Track: Bypass NLI completely. NLI cannot evaluate interrogatives.
-        # If the semantic retrieval distance is solid, immediately return the answer.
-        decision = "ANSWER" if evidence[0]["distance"] < 0.65 else "CLARIFY"
+        # Informational Track: Bypass NLI completely.
+        distance = evidence[0]["distance"]
+        
+        # FIX: Informational questions are binary. 
+        # We either have a highly confident answer, or we abstain.
+        # Never ask for water metrics for a general question.
+        if distance < 0.68:  # Slightly relaxed to catch valid aquaculture questions
+            decision = "ANSWER"
+        else:
+            decision = "ABSTAIN"
         
         # Inject dummy NLI scores so your response_generator.py UI doesn't crash
         for chunk in evidence:
             chunk.update({"entailment": 1.0, "contradiction": 0.0, "neutral": 0.0})
         evaluated = evidence
     else:
-        # 4. Diagnostic Track: Strict NLI CrossEncoder Verification for Symptoms
+        # Diagnostic Track: Strict NLI CrossEncoder Verification for Symptoms
         print("[*] Running NLI verification...")
         evaluated = evaluate_evidence(hypothesis, evidence, nli_model)
         decision = make_decision(evaluated)

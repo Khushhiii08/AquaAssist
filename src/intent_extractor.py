@@ -1,13 +1,32 @@
 import re
 
+# Phase 1: Entity Resolution Layer
+CANONICAL_PARAMS = {
+    "oxygen": "DO",
+    "dissolved oxygen": "DO",
+    "o2": "DO",
+    "potential of hydrogen": "pH",
+    "ammonia": "NH3",
+    "ammonia nitrogen": "NH3",
+    "temp": "temperature",
+    "c": "temperature"
+}
+
+def resolve_entity(entity_string):
+    """Maps raw extracted entities to their canonical database keys."""
+    if not entity_string:
+        return entity_string
+    clean_str = entity_string.lower().strip()
+    return CANONICAL_PARAMS.get(clean_str, entity_string)
+
 def normalize_vernacular_input(text):
     if not text:
         return ""
     return text.strip()
 
-def extract_semantic_triplets(query_lower, pending_metric=None):
+def extract_semantic_triplets(query_lower, pending_metric=None, previous_subject=None):
     """
-    Deterministic Triplet Parser with Explicit Slot Filling
+    Deterministic Triplet Parser with Explicit Slot Filling and Subject Inheritance
     """
     # 1. Detect Subject
     target_subjects = ["shrimp", "రొయ్యలు", "చేపలు", "fish"]
@@ -27,7 +46,8 @@ def extract_semantic_triplets(query_lower, pending_metric=None):
     elif "surface" in query_lower or "gasp" in query_lower or "పైకి" in query_lower:
         symptoms.append("surface gasping / swimming near surface")
         
-    if "green" in query_lower or "color" in query_lower or "ఆకుపచ్చ" in query_lower:
+    # FIX: Use word boundaries (\b) so "greenhouse" doesn't trigger "green"
+    if re.search(r'\bgreen\b', query_lower) or re.search(r'\bcolor\b', query_lower) or "ఆకుపచ్చ" in query_lower:
         symptoms.append("dark green water")
         
     if "dying" in query_lower or "dead" in query_lower or "చనిపోతున్నాయి" in query_lower:
@@ -35,17 +55,22 @@ def extract_semantic_triplets(query_lower, pending_metric=None):
         
     # 3. Extract Numerical Values
     param_triplets = []
+    
     # Try explicit matches first (e.g., "DO is 2.0")
     parameter_matches = re.findall(r'(oxygen|do|ph|temp|temperature).{0,30}?(\d+(?:\.\d+)?)', query_lower)
     for param, val in parameter_matches:
-        param_triplets.append((param.upper(), "value", float(val)))
+        canonical_param = resolve_entity(param)
+        param_triplets.append((canonical_param, "value", float(val)))
         
-    # SLOT FILLING: If it's a naked number, map it to the exact metric the system just asked for
+    # SLOT FILLING & INHERITANCE FIX
     if not param_triplets and pending_metric:
         naked_number_match = re.search(r'(\d+(?:\.\d+)?)', query_lower)
         if naked_number_match:
             val = float(naked_number_match.group(1))
-            param_triplets.append((pending_metric.upper(), "value", val))
+            canonical_pending = resolve_entity(pending_metric)
+            param_triplets.append((canonical_pending, "value", val))
+            if previous_subject and previous_subject != "pond/water":
+                subject = previous_subject
             
     return subject, symptoms, param_triplets
 
@@ -55,20 +80,29 @@ def extract_hypothesis(farmer_query, session_state=None):
     """
     cleaned_query = normalize_vernacular_input(farmer_query)
     
-    # Safely get current accumulated state
     if session_state is None:
-        session_state = {"symptoms": set(), "pending_metric": None}
+        session_state = {"symptoms": set(), "pending_metric": None, "last_subject": None}
         
     print(f"\n[DEBUG] Running Parser on: '{cleaned_query}' | Pending Slot: {session_state.get('pending_metric')}")
     
-    # Run extraction with knowledge of what metric is pending
     subject, new_symptoms, param_triplets = extract_semantic_triplets(
         cleaned_query.lower(), 
-        pending_metric=session_state.get("pending_metric")
+        pending_metric=session_state.get("pending_metric"),
+        previous_subject=session_state.get("last_subject")
     )
     
-    # Accumulate symptoms across turns
+    # --- NEW: PASS-THROUGH GATE ---
+    # If we found zero symptoms, zero parameters, and aren't waiting on a metric,
+    # this is either an informational question or an out-of-domain query.
+    # Return the raw query so the router can see the "What" keyword and process it correctly.
+    if not new_symptoms and not param_triplets and not session_state.get("pending_metric"):
+        print(f"[+] Final Hypothesis (Pass-Through): {cleaned_query}")
+        return cleaned_query, session_state
+    # ------------------------------
+    
+    # Accumulate symptoms across turns and update last known subject
     session_state["symptoms"].update(new_symptoms)
+    session_state["last_subject"] = subject
     
     # Clear pending metric now that we found a number, or keep it if missing
     if param_triplets:

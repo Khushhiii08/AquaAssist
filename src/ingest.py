@@ -3,18 +3,19 @@ import glob
 import re
 import fitz  # PyMuPDF
 import spacy
-import ollama
+import json
 import torch
 import chromadb
 from chromadb.utils import embedding_functions
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 from tqdm import tqdm
+from llama_cpp import Llama, LlamaGrammar
 
 # --- CONFIGURATION ---
-OLLAMA_MODEL = "qwen2.5:1.5b"
+MODEL_PATH = "models/qwen-2.5-1.5b-instruct.gguf"
 DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
 SRC_MODEL = "facebook/nllb-200-distilled-600M"
-CHROMA_BATCH_SIZE = 1000  # Safe incremental save limit
+CHROMA_BATCH_SIZE = 1000  
 
 print(f"[*] Initializing hardware acceleration: {DEVICE.upper()}")
 
@@ -30,44 +31,60 @@ tokenizer = AutoTokenizer.from_pretrained(SRC_MODEL)
 translator_model = AutoModelForSeq2SeqLM.from_pretrained(SRC_MODEL, torch_dtype=torch.float16).to(DEVICE)
 translator_model.eval()
 
-# --- TASK 1.1: SANITIZATION & EXTRACTION ---
-def sanitize_pdf_text(raw_text):
-    text = re.sub(r"(\w+)-\n(\w+)", r"\1\2", raw_text)
-    text = re.sub(r'(?<![.?!])\n+', ' ', text)
-    text = re.sub(r'[ \t]+', ' ', text)
-    text = re.sub(r'\n{2,}', '\n\n', text)
-    return text.strip()
+print("[*] Loading Qwen 1.5B via llama.cpp for Grammar Constrained Generation...")
+llm = Llama(
+    model_path=MODEL_PATH, 
+    n_ctx=2048, 
+    n_gpu_layers=-1,  # Forces 100% GPU offloading for M-series chips
+    verbose=False
+)
+with open("constraints.gbnf", "r") as f:
+    strict_json_grammar = LlamaGrammar.from_string(f.read())
 
+# --- TASK 1.1: RECURSIVE CHUNKING ---
 def load_and_sanitize_pdfs(pdf_directory="data/raw_pdfs"):
     print(f"[*] Scanning '{pdf_directory}' for PDFs...")
     pdf_files = glob.glob(os.path.join(pdf_directory, "*.pdf"))
-    corpus_text = ""
+    semantic_chunks = []
+    
     for pdf_path in pdf_files:
         try:
             doc = fitz.open(pdf_path)
-            for page in doc:
-                corpus_text += sanitize_pdf_text(page.get_text("text")) + "\n\n"
+            for page_num in range(len(doc)):
+                raw_text = doc[page_num].get_text("text")
+                paragraphs = re.split(r'\n\s*\n', raw_text)
+                
+                for para in paragraphs:
+                    cleaned_para = para.replace('\n', ' ').strip()
+                    if len(cleaned_para) > 60:
+                        semantic_chunks.append({
+                            "text": cleaned_para,
+                            "metadata": {
+                                "source": os.path.basename(pdf_path),
+                                "page": page_num + 1
+                            }
+                        })
         except Exception as e:
-            pass
-    return corpus_text
+            print(f"[!] Error reading {pdf_path}: {e}")
+            
+    return semantic_chunks
 
-# --- TASK 1.2: SEMANTIC TRIPLET CHUNKING (UPGRADED T1 FIX) ---
-def extract_semantic_triplets(corpus_text):
+# --- TASK 1.2: SEMANTIC TRIPLET CHUNKING (Consolidated) ---
+def extract_semantic_triplets(semantic_chunks):
     print("[*] Parsing semantic triplets (Subject-Predicate-Object)...")
-    paragraphs = corpus_text.split("\n\n")
     structured_chunks = []
-    
-    # Pre-filter out blatant academic noise before it hits spaCy or the LLM
     bad_keywords = ["et al", "figure", "table ", "references", "kg/ha", "statistically", "spss", "methodology"]
     
-    for para in tqdm(paragraphs, desc="Parsing"):
-        if len(para.strip()) < 20: 
-            continue
-            
+    for chunk in tqdm(semantic_chunks, desc="spaCy Parsing"):
+        para = chunk["text"]
+        
+        # Pre-filter out blatant academic noise
         if any(bad in para.lower() for bad in bad_keywords):
             continue
 
         doc = nlp(para)
+        triplets_in_para = []
+        
         for sent in doc.sents:
             subject, verb, obj = [], [], []
             for token in sent:
@@ -75,32 +92,57 @@ def extract_semantic_triplets(corpus_text):
                 elif "ROOT" in token.dep_ or token.pos_ == "VERB": verb.append(token.text)
                 elif "obj" in token.dep_ or "attr" in token.dep_: obj.append(token.text)
             
-            if subject and verb and obj:
-                # Reject malformed micro-fragments (must be at least 4 words combined)
-                if len(subject) + len(verb) + len(obj) < 4:
-                    continue
-                    
-                actionable_chunk = f"Observation: {' '.join(subject)} {' '.join(verb)} {' '.join(obj)}. Context: {sent.text.strip()}"
-                structured_chunks.append(actionable_chunk)
+            if subject and verb and obj and (len(subject) + len(verb) + len(obj) >= 4):
+                triplets_in_para.append(f"({' '.join(subject)} -> {' '.join(verb)} -> {' '.join(obj)})")
+                
+        # Only pass the chunk to the LLM if we actually found biological relationships
+        if triplets_in_para:
+            actionable_chunk = f"Source Text: {para}\nKey Entities: {', '.join(triplets_in_para)}"
+            structured_chunks.append({
+                "text": actionable_chunk,
+                "metadata": chunk["metadata"]
+            })
                 
     return structured_chunks
 
-# --- TASK 1.3: LLM SYNTHESIS & NOISE FILTERING ---
-def synthesize_advice(triplet_chunk):
-    system_prompt = "You are a strict data-cleaning assistant for an aquaculture knowledge base."
-    user_prompt = f"Read this extracted observation. If it contains actionable biological advice or environmental warnings for a farmer, rewrite it into a short, simple, 1-2 sentence response.\nIf it is administrative, statistical, or academic noise, output exactly the word: SKIP\nData:\n{triplet_chunk}"
-    
+# --- TASK 1.3: LLM SYNTHESIS (Crash-Proofed) ---
+QWEN_SYSTEM_PROMPT = """
+You are a pragmatic aquaculture diagnostician. 
+STRICT CONSTRAINTS: 
+1. IGNORE academic methodology, citations, and statistics. 
+2. EXTRACT ONLY water quality parameters, disease symptoms, and actionable treatments.
+3. BE CONCISE. Keep your recommended action under 2 sentences.
+4. Output ONLY valid JSON.
+"""
+
+def synthesize_advice(chunk_text):
+    user_prompt = f"Extract the actionable diagnostic advice from this data:\n{chunk_text}"
     try:
-        response = ollama.chat(model=OLLAMA_MODEL, messages=[
-            {'role': 'system', 'content': system_prompt},
-            {'role': 'user', 'content': user_prompt}
-        ])
-        return response['message']['content'].strip()
-    except Exception:
-        return "SKIP"
+        response = llm.create_chat_completion(
+            messages=[
+                {"role": "system", "content": QWEN_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt}
+            ],
+            grammar=strict_json_grammar,
+            max_tokens=1024, # Doubled buffer to ensure it always closes the JSON bracket
+            temperature=0.1  # Low temperature stops the model from hallucinating loops
+        )
+        
+        raw_json_str = response['choices'][0]['message']['content']
+        return json.loads(raw_json_str)
+        
+    except json.JSONDecodeError:
+        # We silently pass here so it doesn't clutter your terminal if a bad chunk slips through
+        return None
+    except Exception as e:
+        print(f"\n[!] LLM Synthesis Error: {e}")
+        return None
 
 # --- TASK 1.4: NMT TRANSLATION WITH LEXICON ENFORCER ---
 def translate_to_telugu(text):
+    if not text:
+        return ""
+        
     inputs = tokenizer(text, return_tensors="pt", max_length=256, truncation=True).to(DEVICE)
     forced_bos_token_id = tokenizer.convert_tokens_to_ids("tel_Telu")
     
@@ -109,17 +151,13 @@ def translate_to_telugu(text):
             **inputs, 
             forced_bos_token_id=forced_bos_token_id, 
             max_length=256, 
-            num_beams=2,              # Slight beam search increase for better grammar
-            repetition_penalty=1.2,   # STRICT FIX: Penalize repeating the same word
-            no_repeat_ngram_size=2    # STRICT FIX: Prevent 2-word phrase loops
+            num_beams=2,
+            repetition_penalty=1.2,
+            no_repeat_ngram_size=2
         )
         
     translation = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0].strip()
-    
-    # Domain Lexicon Enforcer: Correct known 600M edge-model artifacts
-    translation = translation.replace("గ్రెయిన్", "రొయ్యలు") # shrimp
-    translation = translation.replace("గ్రెడ్లు", "రొయ్యలు")   # shrimp
-    translation = translation.replace("కుట్టడం", "గడ్డకట్టడం") # clotting
+    translation = translation.replace("గ్రెయిన్", "రొయ్యలు").replace("గ్రెడ్లు", "రొయ్యలు").replace("కుట్టడం", "గడ్డకట్టడం")
     return translation
 
 # --- TASK 1.5: DATABASE COMPILATION ---
@@ -127,51 +165,61 @@ def build_database(chunks, embedding_function):
     db_path = os.path.join("./data", "chroma_db")
     print(f"[*] Initializing ChromaDB at {db_path}")
     client = chromadb.PersistentClient(path=db_path)
-    collection = client.get_or_create_collection(name="aqua_assist", embedding_function=embedding_function)
+    
+    # Wipe the old collection to prevent schema mismatch errors with new metadata
+    try:
+        client.delete_collection("aqua_assist")
+    except Exception:
+        pass
+        
+    collection = client.create_collection(name="aqua_assist", embedding_function=embedding_function)
 
     documents_buffer, metadatas_buffer, ids_buffer = [], [], []
     global_idx = 0
     
     print("[*] Beginning LLM Synthesis and Translation Pipeline...")
-    for chunk in tqdm(chunks, desc="Processing Knowledge Base"):
-        # 1. Synthesize and filter
-        english_advice = synthesize_advice(chunk)
+    for chunk in tqdm(chunks, desc="Building Knowledge Base"):
         
-        # --- STRICT I2 FIX: Case-insensitive block for the 'Skip' bug ---
-        if "skip" in english_advice.lower():
+        synth_payload = synthesize_advice(chunk["text"])
+        
+        # Ensure payload exists and has values
+        if not synth_payload or not isinstance(synth_payload, dict):
             continue
             
-        # 2. Translate the cleaned advice
-        telugu_advice = translate_to_telugu(english_advice)
+        english_action = synth_payload.get("recommended_action_telugu", "")
+        if not english_action or "skip" in english_action.lower():
+            continue
+            
+        telugu_advice = translate_to_telugu(english_action)
         
-        # 3. Buffer for ChromaDB
-        documents_buffer.append(chunk)  # We embed the original triplet for strict retrieval
+        documents_buffer.append(chunk["text"])
         ids_buffer.append(f"prop_chunk_{global_idx}")
         metadatas_buffer.append({
+            "source": chunk["metadata"]["source"],
+            "page": chunk["metadata"]["page"],
             "category": "Aquaculture Advisory",
-            "english_synthesis": english_advice,
+            "english_synthesis": english_action,
             "telugu_translation": telugu_advice
         })
         global_idx += 1
         
-        # 4. Safe incremental saving
         if len(documents_buffer) >= CHROMA_BATCH_SIZE:
             collection.upsert(documents=documents_buffer, metadatas=metadatas_buffer, ids=ids_buffer)
             documents_buffer, metadatas_buffer, ids_buffer = [], [], []
-            if DEVICE == "mps": torch.mps.empty_cache()
             
     if documents_buffer:
         collection.upsert(documents=documents_buffer, metadatas=metadatas_buffer, ids=ids_buffer)
         
-    print(f"[*] Database rebuild complete! Saved {global_idx} fully synthesized conversational items.")
+    print(f"[*] Database rebuild complete! Saved {global_idx} fully synthesized items.")
 
 if __name__ == "__main__":
-    raw_corpus = load_and_sanitize_pdfs("data/raw_pdfs")
-    if raw_corpus:
-        triplet_chunks = extract_semantic_triplets(raw_corpus)
+    raw_chunks = load_and_sanitize_pdfs("data/raw_pdfs")
+    
+    if raw_chunks:
+        # Pass through the restored spaCy logic
+        triplet_chunks = extract_semantic_triplets(raw_chunks)
         
-        # Upgrading to BGE-M3 for Multi-Functionality Search (1024 dimensions)
         print("[*] Loading BAAI/bge-m3 embedding model...")
         bge_ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="BAAI/bge-m3")
-            
+        
         build_database(triplet_chunks, embedding_function=bge_ef)

@@ -15,40 +15,30 @@ from decision_response import get_decision_response
 from whisper_transcriber import transcribe_audio
 
 def cleanup_temp_files():
-    """Wipes old TTS and Whisper audio files on boot to prevent storage leaks."""
-    # 1. Nuke and recreate the TTS folder
-    if os.path.exists("temp_audio"):
-        shutil.rmtree("temp_audio")
     os.makedirs("temp_audio", exist_ok=True)
-    
-    # 2. Delete any leftover Whisper WAV files in the root directory
     for wav_file in glob.glob("temp_farmer_audio*.wav"):
         try:
             os.remove(wav_file)
         except OSError:
             pass
 
-# Run cleanup ONLY on the very first load of the session
 if "cleanup_done" not in st.session_state:
     cleanup_temp_files()
     st.session_state.cleanup_done = True
 
-def text_to_speech_file(text, filename="response_audio.mp3"):
-    """Generates a stable audio file, isolating the target language to save time."""
+# --- TTS CACHING FIX ---
+@st.cache_data(show_spinner=False, max_entries=50)
+def generate_cached_tts(text):
+    """Hashes the text input to prevent reprocessing identical alerts."""
     try:
         os.makedirs("temp_audio", exist_ok=True)
+        # Unique filename based on text hash
+        filename = f"audio_{hash(text) & 0xffffffff}.mp3"
         file_path = os.path.join("temp_audio", filename)
         
-        # Clean text for speech (skip markdown symbols)
         clean_text = text.replace("*", "").replace("#", "").replace("⚠️", "")
+        telugu_lines = [line for line in clean_text.split('\n') if any('\u0c00' <= c <= '\u0c7f' for c in line)]
         
-        # Isolate sentences that contain Telugu script
-        telugu_lines = [
-            line for line in clean_text.split('\n') 
-            if any('\u0c00' <= c <= '\u0c7f' for c in line)
-        ]
-        
-        # If Telugu is present, ONLY read the Telugu portion. Otherwise, read English.
         if telugu_lines:
             speech_text = " ".join(telugu_lines)
             lang = 'te'
@@ -68,46 +58,56 @@ def text_to_speech_file(text, filename="response_audio.mp3"):
 
 st.set_page_config(page_title="AquaAssist", page_icon="🐟", layout="centered")
 
-@st.cache_resource
+# Define exactly once
+MAGIC_URL = "https://github.com/Khushhiii08/AquaAssist/releases/latest/download/chroma_db.zip"
+DB_PATH = "data/chroma_db"
+
+# --- 1. STRICT OTA BOOT ENFORCER ---
+# Runs immediately on page load, completely blocking the UI if the DB is missing
+if not os.path.exists(DB_PATH) or not os.listdir(DB_PATH):
+    with st.spinner("Initial Boot: Extracting Knowledge Base via OTA from GitHub..."):
+        success, msg = download_and_apply_ota_update(MAGIC_URL)
+        if not success:
+            st.error(f"Critical OTA Failure: Cannot boot without database. {msg}")
+            st.stop() # Halts the app entirely
+
+# --- 2. ENGINE WARM-UP ---
+@st.cache_resource(show_spinner=False)
 def get_diagnostic_engine():
     return load_engine()
 
+# Call it immediately on boot so the LLM and Embedding models load into Mac memory 
+# *before* the farmer types a message, making the first response instant.
+get_diagnostic_engine() 
+
 # --- INITIALIZE CONVERSATIONAL STATE ---
 if "diagnostic_state" not in st.session_state:
-    st.session_state.diagnostic_state = {"symptoms": set(), "pending_metric": None}
+    st.session_state.diagnostic_state = {"symptoms": set(), "pending_metric": None, "last_subject": None}
 
-# --- CHATGPT-STYLE SIDEBAR HISTORY ---
 with st.sidebar:
     st.image("https://img.icons8.com/color/96/fish.png", width=36)
     st.markdown("### AquaAssist")
     
-    # Ensure sessions is stored as a list of dicts to avoid legacy KeyErrors
     if "sessions" not in st.session_state or not isinstance(st.session_state.sessions, list):
         st.session_state.sessions = [{"id": 0, "title": "New Chat", "messages": []}]
     if "current_session_id" not in st.session_state:
         st.session_state.current_session_id = 0
         
-    # "+ New Chat" button like ChatGPT
     if st.button("➕ New Chat", use_container_width=True):
         new_id = len(st.session_state.sessions)
         st.session_state.sessions.insert(0, {"id": new_id, "title": "New Chat", "messages": []})
         st.session_state.current_session_id = new_id
-        
-        # Reset the slot-filling memory for the new chat
-        st.session_state.diagnostic_state = {"symptoms": set(), "pending_metric": None}
+        st.session_state.diagnostic_state = {"symptoms": set(), "pending_metric": None, "last_subject": None}
         st.rerun()
         
     st.markdown("---")
     st.markdown("**Chat History**")
     
-    # Find current session dictionary safely
     current_session = next((s for s in st.session_state.sessions if s["id"] == st.session_state.current_session_id), st.session_state.sessions[0])
     
-    # Render history list as clean clickable buttons
     for session in st.session_state.sessions:
         is_current = (session["id"] == st.session_state.current_session_id)
         button_type = "primary" if is_current else "secondary"
-        
         display_title = session["title"] if len(session["title"]) < 28 else session["title"][:25] + "..."
         
         if st.button(display_title, key=f"chat_s_{session['id']}", use_container_width=True, type=button_type):
@@ -115,6 +115,7 @@ with st.sidebar:
                 st.session_state.current_session_id = session["id"]
                 st.rerun()
 
+    # --- OTA UPDATE RESTORED HERE ---
     st.markdown("---")
     st.markdown("**System Status & Sync**")
     st.info("🟢 Mode: Local-First (Offline Ready)")
@@ -122,71 +123,56 @@ with st.sidebar:
     if st.button("🔄 Check Knowledge Updates", use_container_width=True):
         with st.spinner("Downloading latest database directly from GitHub..."):
             
-            # This 'latest/download' structure bypasses the 60/hr API limit entirely
-            MAGIC_URL = "https://github.com/Khushhiii08/AquaAssist/releases/latest/download/chroma_db.zip"
-            
+            # Uses the global MAGIC_URL defined at the top of the script
             success, msg = download_and_apply_ota_update(MAGIC_URL)
             
             if success:
                 st.success(msg)
-                # Force Streamlit to reload ChromaDB so it sees the new data
                 get_diagnostic_engine.clear()
+                get_diagnostic_engine() # Reload immediately
             else:
                 st.error(msg)
 
-# Link active messages list to the selected session
 st.session_state.messages = current_session["messages"]
 
-# --- HEADER ---
 st.title("🐟 AquaAssist")
 st.caption("Evidence-Aware Aquaculture Assistant — తెలుగు & English Support")
 
-# Render active chat history cleanly (with persistent audio support across session switches)
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         if message["role"] == "assistant":
-            audio_path = text_to_speech_file(message["content"], filename=f"msg_{hash(message['content']) & 0xffffffff}.mp3")
+            # Utilize the new caching mechanism
+            audio_path = generate_cached_tts(message["content"])
             if audio_path:
                 st.audio(audio_path, format="audio/mp3")
 
-# --- UNIFIED CHAT INPUT ---
 prompt = st.chat_input("Describe pond symptoms or record voice...", accept_audio=True)
 farmer_query = None
 
 def contains_telugu_script(text):
-    """Checks if the typed string contains characters from the Telugu Unicode block."""
     return bool(re.search(r'[\u0C00-\u0C7F]', text))
 
 if prompt:
-    # Handle Typed Text
     if prompt.text and prompt.text.strip():
         if contains_telugu_script(prompt.text):
             st.warning("⚠️ For Telugu support, please click the 🎙️ microphone icon to record your voice. Typed text is currently English-only.")
         else:
             farmer_query = prompt.text.strip()
             
-    # Handle Audio Recording (T5 Voice Flow Fix)
     elif prompt.audio is not None:
         audio_path = "temp_farmer_audio.wav"
-        
-        # 1. Immediately save the recorded buffer to disk
         with open(audio_path, "wb") as f:
             f.write(prompt.audio.getbuffer())
             
-        # 2. Block the UI with a spinner so the user knows submission succeeded
         with st.spinner("Transcribing vernacular audio locally..."):
             transcribed_text = transcribe_audio(audio_path)
-            
-            # 3. Assign to farmer_query to trigger the pipeline block below
             if transcribed_text:
                 farmer_query = transcribed_text
             else:
                 st.error("Audio transcription failed. Please try speaking closer to the microphone.")
 
-# --- PIPELINE EXECUTION ---
 if farmer_query:
-    # Auto-update the session title to the user's first query if it's still "New Chat"
     if current_session["title"] == "New Chat":
         current_session["title"] = farmer_query
 
@@ -202,8 +188,7 @@ if farmer_query:
             ui_response = f"{english_warning}\n\n{telugu_warning}"
             st.markdown(ui_response)
             
-            # The TTS engine will automatically isolate and speak the Telugu line
-            audio_path = text_to_speech_file(ui_response, filename=f"msg_{hash(ui_response) & 0xffffffff}.mp3")
+            audio_path = generate_cached_tts(ui_response)
             if audio_path:
                 st.audio(audio_path, format="audio/mp3")
 
@@ -211,50 +196,114 @@ if farmer_query:
             
         else:
             with st.spinner("Analyzing telemetry & retrieving evidence..."):
-                # Pass the living state object to the extractor
                 hypothesis, updated_state = extract_hypothesis(
                     farmer_query, 
                     session_state=st.session_state.diagnostic_state
                 )
                 
-                # Save the updated state
+                # --- NEW: BIOLOGICAL EMERGENCY SHORT-CIRCUIT ---
+                # Bypass ChromaDB and the LLM entirely for lethal thresholds
+                telemetry_val = None
+                numeric_only = re.search(r'^\s*(\d+(\.\d+)?)\s*$', farmer_query)
+                if numeric_only:
+                    telemetry_val = float(numeric_only.group(1))
+                else:
+                    do_match = re.search(r'(?i)DO.*?(\d+(\.\d+)?)', hypothesis)
+                    if do_match:
+                        telemetry_val = float(do_match.group(1))
+
+                if telemetry_val is not None and telemetry_val < 3.0:
+                    english_text = f"CRITICAL EMERGENCY: Dissolved Oxygen is {telemetry_val} ppm. Shrimp are suffocating. Turn on all aerators immediately and halt all feeding."
+                    telugu_text = f"అత్యవసర పరిస్థితి: ఆక్సిజన్ స్థాయి {telemetry_val} ppm. రొయ్యలు ఊపిరాడక ఇబ్బంది పడుతున్నాయి. వెంటనే అన్ని ఏరేటర్లను ఆన్ చేయండి మరియు ఆహారం ఇవ్వడం ఆపండి."
+                    
+                    ui_response = f"🚨 **English Action:** {english_text}\n\n🚨 **Telugu Action:** {telugu_text}"
+                    
+                    st.error("Lethal Water Parameter Detected!")
+                    st.markdown(ui_response)
+                    
+                    audio_path = generate_cached_tts(ui_response)
+                    if audio_path:
+                        st.audio(audio_path, format="audio/mp3")
+                        
+                    # Save to chat history and immediately reload to halt standard RAG
+                    st.session_state.messages.append({"role": "assistant", "content": ui_response})
+                    
+                    # --- NEW: WIPE STATE AFTER EMERGENCY ---
+                    st.session_state.diagnostic_state = {"symptoms": set(), "pending_metric": None, "last_subject": None}
+                    st.rerun() 
+                # -------------------------------------------
+                
+                # If no emergency, proceed to standard RAG pipeline
                 st.session_state.diagnostic_state = updated_state
                 
                 embedding_model, nli_model, collection = get_diagnostic_engine()
                 result = run_diagnostic(hypothesis, embedding_model, nli_model, collection)
                 
                 decision = result.get("decision", "CLARIFY")
+                
+                # --- NEW: HARD TELEMETRY GATE ---
+                # Only force clarification if it's a diagnostic symptom query missing numbers
+                has_telemetry = bool(re.search(r'\d', farmer_query))
+                is_symptom_query = "exhibits" in hypothesis or any(s in hypothesis.lower() for s in ["eating", "swimming", "dying", "gasping"])
+                
+                if not has_telemetry and is_symptom_query and decision == "ANSWER":
+                    decision = "CLARIFY"
+                # --------------------------------
+                
                 ui_response = ""
+                report_content = ""
 
                 if decision == "CLARIFY":
-                    # The system wants more info. Set the slot we are waiting for!
                     st.session_state.diagnostic_state["pending_metric"] = "DO"
                     ui_response = get_decision_response("CLARIFY")["message"]
                 elif decision == "ABSTAIN":
                     ui_response = get_decision_response("ABSTAIN")["message"]
                 elif decision == "ANSWER":
-                    # 1. Get structured bilingual response directly from the metadata router
                     response_data = generate_answer(hypothesis, result["evidence"])
-                    
-                    # 2. Unpack the clean strings
                     english_text = response_data["english"]
                     telugu_text = response_data["telugu"]
 
-                    # --- SAFETY CATCH FOR CORRUPTED RECORDS ---
                     if "skip" in english_text.lower() or "skip" in telugu_text.lower():
                         english_text = "Critical observation detected, but standard evidence was filtered. Check aeration and water quality immediately."
                         telugu_text = "క్లిష్టమైన పరిస్థితి గుర్తించబడింది. దయచేసి వెంటనే ఏరేటర్లను ఆన్ చేసి నీటి నాణ్యతను తనిఖీ చేయండి."
 
-                    # 3. Render the bilingual UX smoothly
                     ui_response = f"**English Observation:** {english_text}\n\n**Telugu Advice:** {telugu_text}"
+                    
+                    # --- NEW: Extract Metadata for Citation ---
+                    top_chunk = result["evidence"][0]
+                    source_doc = top_chunk["metadata"].get("source", "Unknown Manual")
+                    page_num = top_chunk["metadata"].get("page", "N/A")
+                    
+                    # Render Academic Citation
+                    st.caption(f"**Source:** {source_doc}, Page {page_num} (Distance: {top_chunk['distance']:.3f})")
+                    
+                    # Construct Export Log content
+                    report_content = (
+                        "=== AquaAssist Diagnostic Log ===\n"
+                        f"System State: {updated_state}\n\n"
+                        "--- English Action ---\n"
+                        f"{english_text}\n\n"
+                        "--- Telugu Action ---\n"
+                        f"{telugu_text}\n\n"
+                        f"Reference: {source_doc} (pg. {page_num})"
+                    )
 
             st.markdown(ui_response)
             
-            audio_path = text_to_speech_file(ui_response, filename=f"msg_{hash(ui_response) & 0xffffffff}.mp3")
+            audio_path = generate_cached_tts(ui_response)
             if audio_path:
                 st.audio(audio_path, format="audio/mp3")
 
             st.session_state.messages.append({"role": "assistant", "content": ui_response})
+            
+            # --- NEW: Export Diagnostic Button ---
+            if report_content:
+                st.download_button(
+                    label="📥 Export Diagnostic Log",
+                    data=report_content,
+                    file_name="AquaAssist_Report.txt",
+                    mime="text/plain"
+                )
 
             with st.expander("🛠️ Pipeline Debug Logs (For Engineering Team)"):
                 st.write(f"**Raw Farmer Query:**\n{farmer_query}")
@@ -262,9 +311,9 @@ if farmer_query:
                 st.write("**NLI Verification Results:**")
                 for chunk in result.get("evidence", []):
                     st.text(
-                        f"ID: {chunk['id']} | Dist: {chunk['distance']:.4f}\n"
-                        f"Entailment: {chunk['entailment']:.4f} | "
-                        f"Neutral: {chunk['neutral']:.4f} | "
-                        f"Contradiction: {chunk['contradiction']:.4f}"
+                        f"ID: {chunk.get('id', 'N/A')} | Dist: {chunk.get('distance', 0.0):.4f}\n"
+                        f"Entailment: {chunk.get('entailment', 0.0):.4f} | "
+                        f"Neutral: {chunk.get('neutral', 0.0):.4f} | "
+                        f"Contradiction: {chunk.get('contradiction', 0.0):.4f}"
                     )
                 st.write(f"**Active State:** {st.session_state.diagnostic_state}")
