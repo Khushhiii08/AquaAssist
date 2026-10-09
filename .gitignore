@@ -27,9 +27,6 @@ temp_audio/
 *.wav
 *.mp3
 
-# Local Experimental Scripts & Sandboxes
-testing/
-
 # OS-Specific Compiled Binaries
 bin/
 
