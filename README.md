@@ -1,382 +1,155 @@
-# Evidence-Aware Vernacular RAG (EAV-RAG)
+# AquaAssist 🦐🐟
 
-## Abstract
-
-AI adoption in high-stakes agricultural domains such as aquaculture is constrained by unreliable internet connectivity and the vulnerability of edge-deployed Small Language Models (SLMs) to hallucination.
-
-This repository contains the source code for an **Evidence-Aware Vernacular RAG (EAV-RAG)** architecture designed to support offline aquaculture diagnostics on edge hardware.
-
-The system uses multilingual BGE-M3 retrieval, local ChromaDB storage, NLI-based evidence verification, deterministic three-way decision routing, and locally deployed Qwen language models.
-
-The project is being developed in multiple phases, covering knowledge-base construction, evidence verification, RLAIF data generation, safety routing, and constrained edge generation.
+**An Evidence-Grounded, Edge-Oriented Aquaculture Decision-Support System with Explicit Safety Handling**
 
 ---
 
-## Repository Architecture
+## 📌 Overview
 
-```text
-AquaAssist/
-│
-├── src/
-│   ├── ingest.py
-│   ├── embed.py
-│   ├── test_retrieval.py
-│   ├── cross_encoder_gate.py
-│   ├── decision_router.py
-│   ├── intent_extractor.py
-│   ├── generate_rlaif_data.py
-│   ├── test_aquaculture_invariants.py
-│   ├── train_router.py
-│   ├── measure_latency.py
-│   └── profile_qwen_latency.py
-│
-├── data/
-│   ├── processed/
-│   │   └── chunks.json
-│   ├── evaluation/
-│   │   └── rlaif_dataset.json
-│   └── chroma_db/
-│
-├── docs/
-│   ├── figures/
-│   └── engineering documentation
-│
-├── models/
-│   └── Local model files
-│
-└── README.md
+In rural aquaculture, farmers frequently encounter rapid water-quality shifts (such as critical dissolved oxygen depletion and pH fluctuations) and aquatic disease outbreaks under limited or unreliable internet connectivity. While conventional monitoring systems stop at raw sensor alerts and general-purpose large language models often hallucinate risky, ungrounded domain advice, **AquaAssist** delivers a local-first, evidence-grounded diagnostic workflow tailored for resource-constrained edge hardware.
+
+AquaAssist separates offline knowledge-base preparation from an ultra-safe, deterministic farmer-facing diagnostic runtime. It implements a rigorous **Retrieve $\rightarrow$ Verify $\rightarrow$ Decide $\rightarrow$ Construct** pipeline that enforces biological boundaries, resolves conversational context, verifies candidate evidence via Natural Language Inference (NLI), and selectively routes actions into three explicit states: **ANSWER**, **CLARIFY**, or **ABSTAIN**.
+
+---
+
+## 🏗️ System Architecture
+
+AquaAssist replaces unrestricted runtime generative text with deterministic extraction and cross-encoder hypothesis verification:
+
+```
+[Farmer Query (Voice / Text)]
+            │
+            ▼
+[Whisper STT (16 kHz)] / Text Input
+            │
+            ▼
+[intent_extractor.py] ─── (Regex + Entity Heuristics)
+            │
+            ├──► Critical Telemetry Check (DO < 3.0 ppm) ──► [EMERGENCY BYPASS]
+            ├──► Biological Boundary Guardrails (pH 4.0–11.0, DO > 20.0 ppm)
+            │
+            ▼
+[Candidate Retrieval] ─── BAAI/bge-m3 (1024-dim) + ChromaDB
+            │
+            ├──► Distance & Species Filtering (Distance > 0.80 rejected; species-aligned)
+            │
+            ▼
+[Safety Verification] ─── DeBERTa-v3-small Cross-Encoder (NLI)
+            │             (Entailment, Neutral, Contradiction)
+            ▼
+[Decision Routing Logic]
+    ├── ANSWER   ── (Entailment >= 0.75, fully grounded by evidence)
+    ├── CLARIFY  ── (Insufficient evidence or missing required parameters)
+    └── ABSTAIN  ── (Contradiction >= 0.90, invalid telemetry, or unsupported advice)
+            │
+            ▼
+[response_generator.py] ── Stored Expert Advice + Grounded Numerical Telemetry
+            │
+            ▼
+[Multimodal Output] ───── Streamlit Dashboard / gTTS Audio Output (English & Telugu)
 ```
 
-- `src/`: Core Python scripts for ingestion, retrieval, evidence verification, routing, data generation, and profiling.
-- `data/processed/`: Processed aquaculture evidence chunks.
-- `data/evaluation/`: Evaluation and RLAIF datasets.
-- `data/chroma_db/`: Local ChromaDB vector store.
-- `docs/`: Engineering documentation, references, and architecture diagrams.
-- `models/`: Local model files. Model weights are excluded from version control.
+---
+
+## ✨ Key Features
+
+- **Local-First & Edge-Optimized**: Engineered to operate on a 4-core CPU with $\le 8\text{ GB}$ RAM, targeting a peak resident memory of $\le 2.5\text{ GB}$ and an end-to-end response time of $\le 7.0\text{ s}$. Supports Apple Silicon MPS, NVIDIA CUDA FP16, and multi-threaded CPU AVX2/NEON execution.
+- **Deterministic Parameter & Intent Extraction**: `intent_extractor.py` handles species, symptoms, water-quality measurements, and conversational slot-filling without stochastic runtime LLMs. Includes an ultra-insensitive regular-expression schema built for field-facing human-machine interface (HMI) fault tolerance (e.g., handling variations like `D.0`, `d.o`, and irregular spacing).
+- **Multi-Layered Safety Guardrails**:
+  - **Biological Invariant Checks**: Intercepts impossible physical values (e.g., $\text{pH} < 4.0$ or $> 11.0$, $\text{DO} > 20.0\text{ mg/L}$) prior to vector-space search.
+  - **Emergency Telemetry Bypass**: A parsed $\text{DO} < 3.0\text{ ppm}$ immediately triggers an emergency alert, bypassing neural retrieval and inference entirely.
+  - **Contradiction Detection**: Halts normal diagnostic processing if conflicting telemetry is supplied (e.g., $\text{DO} = 2.5\text{ mg/L}$ and $8.0\text{ mg/L}$).
+- **NLI Hypothesis Verification**: Does not treat vector similarity as diagnostic proof. A domain-adapted DeBERTa-v3-small Cross-Encoder verifies whether retrieved evidence entails ($\ge 0.75$) or contradicts ($\ge 0.90$) the diagnostic hypothesis.
+- **Zero-Drift Response Construction**: `response_generator.py` binds pre-verified expert advice (curated from 23 aquaculture and veterinary reference manuals) with deterministic boilerplate and explicitly grounded numerical telemetry.
+- **Bilingual & Multimodal Support**: Accommodates voice input (Whisper), English and Telugu text output (with offline NLLB-200 translation), and cached text-to-speech (gTTS with MD5 caching).
 
 ---
 
-## Initial Setup and Installation
+## 📊 Technical Stack & Subsystem Roles
 
-### 1. Clone the Repository
+| Component | Model / Configuration | Role in AquaAssist |
+|---|---|---|
+| **Semantic Embeddings** | `BAAI/bge-m3` (1024-dim) | Encodes normalized queries and knowledge base chunks |
+| **Vector Database** | `ChromaDB 1.5.9` | Local vector storage (4,384 indexed documents) |
+| **NLI Verification Gate** | `DeBERTa-v3-small` Cross-Encoder | Conditional Entailment / Neutral / Contradiction classification |
+| **Query Extraction** | Python regex + token/entity heuristics | Deterministic intent, parameter extraction, and slot filling |
+| **Response Construction** | `response_generator.py` | Selects stored advice and injects grounded numerical values |
+| **Knowledge-Base Prep** | `Qwen-2.5-1.5B` (llama.cpp, GGUF + GBNF) | Offline structured extraction/synthesis (not used at runtime) |
+| **Translation** | `NLLB-200` | Offline English-to-Telugu translation during corpus preparation |
+| **Voice Transcription** | `Whisper` / `faster-whisper` | 16 kHz mono local speech-to-text |
+| **User Interface** | `Streamlit` | Field-facing interactive dashboard |
+
+---
+
+## 📈 Evaluation & Benchmark Summary
+
+Experimental evaluation across targeted engineering scenarios (T1–T6) and a 20-case guardrail validation matrix demonstrates:
+
+- **Retrieval Accuracy**: 80% direct relevance (4 of 5 top-ranked candidates) on surface emergence queries; 93.3% (14 of 15) manual evidence queries fully supported by the corpus.
+- **Guardrail Conformance**: **20/20 (100%)** expected deterministic outcomes verified across critical low-DO, impossible telemetry, and out-of-domain input categories.
+- **Conversational Slot Inheritance**: Successfully inherited standalone numerical follow-up values (e.g., inheriting `"2.0"` into a pending `DO` slot) and preserved temporal context isolation.
+- **Component Latency**:
+  - `BGE-M3` cold-start loading: $\approx 32.12\text{ s}$ (one-time initialization overhead)
+  - Mean embedding time: $0.426\text{ s}$
+  - Mean ChromaDB retrieval time: $0.014\text{ s}$
+  - Total retrieval pipeline latency: $\mathbf{0.440\text{ s}}$
+
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+- Python 3.10+
+- Minimum hardware: 4-Core CPU, 8 GB RAM (Supports Apple Silicon MPS & x86-64 AVX2)
+- Docker (optional, recommended for reproducible deployment)
+
+### Local Installation
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/your-org/AquaAssist.git
+   cd AquaAssist
+   ```
+
+2. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Initialize Knowledge Base & Vector Store:**
+   Sync and populate the local ChromaDB database:
+   ```bash
+   python sync_manager.py --init
+   ```
+
+4. **Run the Streamlit Interface:**
+   ```bash
+   streamlit run app.py
+   ```
+
+---
+
+## 🐳 Docker Deployment
+
+AquaAssist can be run in a containerized environment, keeping database state decoupled from the container image for seamless over-the-air (OTA) atomic updates:
 
 ```bash
-git clone https://github.com/Khushhiii08/AquaAssist.git
-cd AquaAssist
+# Build the Docker image
+docker build -t aqua-assist:latest .
+
+# Run the container with mounted ChromaDB volume
+docker run -p 8501:8501 \
+  -v $(pwd)/data/chroma:/app/data/chroma \
+  aqua-assist:latest
 ```
-
-### 2. Create a Virtual Environment
-
-```bash
-python -m venv venv
-```
-
-On Windows:
-
-```powershell
-.\venv\Scripts\activate
-```
-
-On Linux/macOS:
-
-```bash
-source venv/bin/activate
-```
-
-### 3. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-The project uses components such as:
-
-- Python
-- PyMuPDF
-- Sentence Transformers
-- BGE-M3
-- ChromaDB
-- DeBERTa-based NLI models
-- PyTorch
-- llama.cpp
-- Qwen instruction-tuned models
 
 ---
 
-# Project Phases
+## 🔬 Known Limitations & Future Work
 
-## Phase 0 — Dataset Preparation and Evidence Correction
-
-Phase 0 focused on improving the quality of the evidence used by the RLAIF dataset and NLI pipeline.
-
-### Completed Work
-
-- Updated the ingestion pipeline in `src/ingest.py`.
-- Changed the evidence chunking process to produce focused chunks of at most **50 words**.
-- Rebuilt the processed dataset in `data/processed/chunks.json`.
-- Rebuilt the local ChromaDB collection using the corrected chunks.
-- Regenerated `data/evaluation/rlaif_dataset.json`.
-- Removed temporary and generated files that were not intended for version control.
-
-### Validation Results
-
-- Total processed chunks: **1,783**
-- Maximum chunk size: **50 words**
-- Chunks exceeding 50 words: **0**
-- Total RLAIF samples: **5,349**
-- Evidence samples exceeding 50 words: **0**
-- `ANSWER` samples: **1,783**
-- `CLARIFY` samples: **1,783**
-- `ABSTAIN` samples: **1,783**
-- ChromaDB collection size: **1,783 chunks**
+As analyzed in the technical evaluation:
+- **Canonical Slot Normalization**: Addressing parameter mapping mismatches (e.g., standardizing `"dissolved oxygen"` directly to canonical `DO` to prevent state stalls).
+- **Vernacular Speech Recognition**: Improving acoustic speech-to-text accuracy for diverse regional Telugu dialects.
+- **Diagnostic Subject Persistence**: Enhancing multi-turn subject tracking to maintain specific species context (e.g., shrimp vs. pond water) across multi-turn follow-ups.
 
 ---
-
-## Phase 1 — Knowledge Base Construction
-
-Phase 1 established the local aquaculture knowledge base using approved aquaculture manuals and reports.
-
-### Ingestion
-
-File: `src/ingest.py`
-
-- Extracts text from PDF documents using PyMuPDF.
-- Produces focused evidence chunks with a maximum length of 50 words.
-- Applies rule-based metadata tagging for species and knowledge topics.
-- Stores processed chunks in `data/processed/chunks.json`.
-
-### Embedding and Vector Storage
-
-File: `src/embed.py`
-
-- Uses the `BAAI/bge-m3` multilingual embedding model.
-- Generates normalized dense vector representations.
-- Stores embeddings in a persistent local ChromaDB collection.
-
-### Retrieval Testing
-
-File: `src/test_retrieval.py`
-
-- Tests retrieval using aquaculture benchmark queries.
-- Records retrieved evidence and similarity scores.
-- Supports evaluation of the local retrieval pipeline.
-
-### Phase 1 Status
-
-- Knowledge corpus curation — Completed
-- PDF ingestion — Completed
-- Evidence chunk generation — Completed
-- Metadata tagging — Completed
-- BGE-M3 embedding — Completed
-- ChromaDB storage — Completed
-- Retrieval testing — Completed
-- Phase 1 documentation — Completed
-
----
-
-## Phase 2 — Evidence Verification and Edge Generation
-
-Phase 2 extends the retrieval pipeline with query extraction, NLI-based evidence verification, deterministic decision routing, RLAIF data generation, and local edge-model profiling.
-
-## Phase 2 Architecture
-
-The planned cascaded pipeline is:
-
-```text
-Farmer Query
-     │
-     ▼
-Qwen-2.5-0.5B Pre-Retrieval Intent Extraction
-     │
-     ▼
-BGE-M3 Query Embedding
-     │
-     ▼
-ChromaDB Top-K Retrieval
-     │
-     ▼
-DeBERTa NLI Evidence Verification
-     │
-     ▼
-Three-Way Decision Router
- ┌──────────┬───────────┬───────────┐
- │ ANSWER   │ CLARIFY   │ ABSTAIN   │
- └──────────┴───────────┴───────────┘
-     │
-     ▼
-Qwen-2.5-1.5B Local Generation
-     │
-     ▼
-Constrained Response
-```
-
-The complete end-to-end integration is still under development.
-
-### 1. Pre-Retrieval Intent Extraction
-
-File: `src/intent_extractor.py`
-
-The pre-retrieval extraction layer uses `qwen-2.5-0.5b-instruct.gguf` through `llama.cpp`.
-
-Its purpose is to:
-
-- Process conversational farmer queries.
-- Remove greetings, questions, and unnecessary conversational content.
-- Extract the main biological or chemical symptoms.
-- Convert the input into a declarative hypothesis beginning with:
-
-```text
-The pond exhibits...
-```
-
-Initial local testing showed successful extraction for several test cases, although repetitive output was observed in one case and requires further refinement.
-
-### 2. NLI Cross-Encoder Evidence Gate
-
-File: `src/cross_encoder_gate.py`
-
-The evidence-verification component currently:
-
-1. Encodes the query using BGE-M3.
-2. Retrieves the top-15 candidate chunks from ChromaDB.
-3. Evaluates query-evidence pairs using `cross-encoder/nli-deberta-v3-small`.
-4. Filters candidate evidence using the current entailment threshold of `0.85`.
-5. Returns the verified evidence chunks.
-
-The integration of the extracted hypothesis into the complete retrieval and verification pipeline is still in progress.
-
-### 3. Three-Way Decision Policy
-
-File: `src/decision_router.py`
-
-The planned deterministic routing policy contains three possible decisions:
-
-- **ANSWER** — the evidence sufficiently supports the hypothesis.
-- **CLARIFY** — the available evidence is insufficient or neutral.
-- **ABSTAIN** — contradictory or potentially unsafe evidence is detected.
-
-The initial routing thresholds are:
-
-- Entailment: `>= 0.75`
-- Neutral: `> 0.40`
-- Contradiction: `> 0.30`
-
-These thresholds require further empirical evaluation and calibration.
-
-### 4. Automated RLAIF Data Engine
-
-The RLAIF data-generation pipeline produces synthetic NLI examples across three categories:
-
-- Entailment
-- Neutral
-- Contradiction
-
-The regenerated dataset currently contains:
-
-- **5,349 total samples**
-- **1,783 ANSWER samples**
-- **1,783 CLARIFY samples**
-- **1,783 ABSTAIN samples**
-
-The dataset includes evidence, declarative hypotheses, NLI labels, and expected routing decisions.
-
-Further validation is required to confirm that biological invariant checks are applied to every generated sample before it is added to the dataset.
-
-### 5. Biological Invariant Verification
-
-File: `src/test_aquaculture_invariants.py`
-
-The project includes biological invariant verification intended to identify invalid or unsafe aquaculture-related claims.
-
-The invariant-verification function has been implemented and tested separately. Complete integration with the RLAIF generation workflow requires further confirmation.
-
-### 6. Local Edge Generation
-
-The project includes local Qwen models for edge-based language generation:
-
-- `qwen-2.5-0.5b-instruct.gguf`
-- `qwen-2.5-1.5b-instruct.gguf`
-
-The models are executed locally using `llama.cpp`.
-
-Planned generation features include:
-
-- Offline inference
-- Local response generation
-- GBNF-constrained structured output
-- Vernacular response support
-
-Full integration and GBNF generation verification are still pending.
-
-### 7. Model Latency and Resource Profiling
-
-File: `src/profile_qwen_latency.py`
-
-Initial local profiling was performed for the two Qwen models.
-
-| Model | Load Time | TTFT | Total Generation Time | Peak Memory |
-|---|---:|---:|---:|---:|
-| Qwen-2.5-0.5B | 0.56 s | 0.44 s | 3.75 s | 489.05 MB |
-| Qwen-2.5-1.5B | 3.22 s | 1.06 s | 6.13 s | 1400.74 MB |
-
-These measurements represent local model-level profiling. Full end-to-end pipeline profiling is still pending.
-
----
-
-## Documentation and Figures
-
-The `docs/` directory contains engineering documentation, literature references, and architecture diagrams.
-
-Current Phase 2 diagrams include:
-
-1. Cascaded Retrieval and Evidence Verification Pipeline
-2. Three-Way Evidence-Gated Decision State Machine
-3. Automated RLAIF Data Generation and Verification Engine
-4. Phase 2 Latency Breakdown
-5. Updated Phase 1 and Phase 2 Pipeline Diagrams
-
----
-
-## Current Development Status
-
-### Phase 0
-
-- Dataset evidence correction — Completed
-- 50-word evidence chunking — Completed
-- RLAIF dataset regeneration — Completed
-- Dataset label balancing — Completed
-- ChromaDB reconstruction — Completed
-
-### Phase 1
-
-- Knowledge corpus curation — Completed
-- PDF ingestion — Completed
-- Evidence chunk generation — Completed
-- Metadata tagging — Completed
-- BGE-M3 embedding — Completed
-- ChromaDB storage — Completed
-- Retrieval testing — Completed
-- Documentation — Completed
-
-### Phase 2
-
-- Pre-retrieval intent extraction — Implemented and locally tested
-- NLI Cross-Encoder evidence gate — Implemented
-- Three-way decision policy — Implemented, calibration pending
-- RLAIF data generation — Implemented
-- Biological invariant verification — Implemented separately; integration pending
-- DeBERTa router fine-tuning — Pending
-- GBNF-constrained generation — Pending verification
-- Qwen-2.5-1.5B edge generation — Partially implemented
-- Complete end-to-end integration — Pending
-- End-to-end performance evaluation — Pending
-- Streamlit interface — Planned/in development
-
----
-
-## Project Contributors
-
-- **Khushi** — Core ML Architecture and Pipeline Implementation
-- **Meghana** — Integration, SLM Generation, and UI
-- **Jyothish** — Documentation, Logbook, Reference Management, and Visual Architecture
-- **Praisy** — Data Engine, Verification, and Evaluation Support
