@@ -8,3 +8,7 @@ temp_audio/
 *.wav
 *.mp3
 .DS_Store
+models/
+docs/
+testing/
+retrieval_output.txt
