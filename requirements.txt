@@ -1,0 +1,14 @@
+gradio>=5.0.0,<6.0.0
+spaces
+edge-tts>=7.0.0
+huggingface_hub
+chromadb>=0.4.22
+transformers>=4.38.0
+sentence-transformers>=2.5.0
+faster-whisper>=1.0.0
+requests>=2.28.0
+torch>=2.0.0
+pydantic>=2.0.0
+openai-whisper
+torchvision
+llama-cpp-python

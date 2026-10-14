@@ -1,0 +1,15 @@
+.git
+__pycache__/
+venv/
+.venv/
+data/
+data/raw_pdfs/
+data/chroma_db/
+temp_audio/
+*.wav
+*.mp3
+.DS_Store
+models/
+docs/
+testing/
+retrieval_output.txt

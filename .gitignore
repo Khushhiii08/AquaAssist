@@ -1,0 +1,37 @@
+# Python environments & cache
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Mac OS files
+__MACOSX/
+.DS_Store
+
+# Data & Databases
+data/
+data/raw_pdfs/
+data/chroma_db/
+data/processed/
+data/evaluation/
+*.zip
+
+# Machine Learning Models (Heavy weights - strictly blocked)
+models/
+*.gguf
+*.bin
+*.safetensors
+*.pt
+
+# Audio & Media
+temp_audio/
+*.wav
+*.mp3
+
+# OS-Specific Compiled Binaries
+bin/
+
+# Local Test Outputs, Spreadsheets, & Logs
+retrieval_output.txt
+*.xlsx
+*.csv

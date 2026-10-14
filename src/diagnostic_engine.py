@@ -1,0 +1,251 @@
+import os
+import re
+import torch
+import chromadb
+from chromadb.utils import embedding_functions
+from sentence_transformers import SentenceTransformer, CrossEncoder
+
+# Project paths
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+
+DB_PATH = os.path.join(PROJECT_ROOT, "data", "chroma_db")
+NLI_MODEL_PATH = os.path.join(PROJECT_ROOT, "models", "deberta_aquaculture_router")
+
+EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+COLLECTION_NAME = "aqua_assist"
+
+TOP_K = 5
+
+# --- DECISION THRESHOLDS ---
+ENTAILMENT_THRESHOLD = 0.75
+NEUTRAL_THRESHOLD = 0.40
+CONTRADICTION_THRESHOLD = 0.30
+
+# --- HARDWARE ACCELERATION SELECTOR ---
+# Automatically detects Apple Silicon (MPS), NVIDIA CUDA, or falls back to CPU
+DEVICE = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
+
+# Retrieval Quality Filter (Lower distance = better match. 0.80 is a strict cutoff for BGE-M3)
+MAX_DISTANCE_THRESHOLD = 0.80
+
+def detect_conflicting_measurements(farmer_query):
+    """
+    Ultra-insensitive conflict detector.
+    Catches DO, D.O., D0, d.0, pH, P.H., P H, irrespective of case.
+    """
+    # (?i) makes it completely case-insensitive.
+    # d[\.\s]*[o0] catches D followed by optional periods/spaces, then the letter O or number 0
+    do_pattern = r"(?i)(?:d[\.\s]*[o0]|dissolved oxygen|oxygen)[^\d]{0,25}(\d+(?:\.\d+)?)"
+    
+    # p[\.\s]*h catches P followed by optional periods/spaces, then H
+    ph_pattern = r"(?i)\bp[\.\s]*h[^\d]{0,25}(\d+(?:\.\d+)?)"
+    
+    do_matches = re.findall(do_pattern, farmer_query)
+    ph_matches = re.findall(ph_pattern, farmer_query)
+    
+    do_values = set(float(val) for val in do_matches)
+    ph_values = set(float(val) for val in ph_matches)
+    
+    conflicts = []
+    
+    # 1. Internal Contradiction Check
+    if len(do_values) > 1:
+        conflicts.append(f"Multiple DO readings: {do_values}")
+    if len(ph_values) > 1:
+        conflicts.append(f"Multiple pH readings: {ph_values}")
+        
+    # 2. Biological Boundary Check
+    for ph in ph_values:
+        if ph < 4.0 or ph > 11.0:
+            conflicts.append(f"Impossible pH: {ph}")
+            
+    for do_val in do_values:
+        if do_val > 20.0:
+            conflicts.append(f"Impossible DO: {do_val}")
+            
+    if conflicts:
+        print(f"\n[!] CONFLICT GATE TRIGGERED: {', '.join(conflicts)}")
+        return True
+        
+    return False
+
+def load_engine():
+    """
+    Initializes the embedding model, NLI router, and ChromaDB collection.
+    """
+    print("[*] Loading Diagnostic Routing Models...")
+    # Explicitly route the multi-vector M3 model to the CPU
+    embedding_model = embedding_functions.SentenceTransformerEmbeddingFunction(
+        model_name="BAAI/bge-m3",
+        device=DEVICE
+    )
+    print("[*] Loading fine-tuned DeBERTa CrossEncoder...")
+    nli_model = CrossEncoder(NLI_MODEL_PATH, device=DEVICE)
+
+    print("[*] Connecting to ChromaDB...")
+    client = chromadb.PersistentClient(path=DB_PATH)
+    collection = client.get_collection(COLLECTION_NAME)
+
+    print("[+] Diagnostic engine loaded successfully.")
+    return embedding_model, nli_model, collection
+
+def retrieve_evidence(hypothesis, embedding_model, collection, top_k=5):
+    """
+    Phase 3 Retrieval Quality Gate: Enforces strict BGE-M3 distance thresholds 
+    and filters out low-content micro-chunks.
+    """
+    # FIX: Call the Chroma embedding function directly with a list of strings
+    embeddings = embedding_model([hypothesis])
+
+    results = collection.query(
+        query_embeddings=embeddings,
+        n_results=top_k,
+        include=["documents", "metadatas", "distances"]
+    )
+
+    evidence = []
+
+    for i in range(len(results["ids"][0])):
+        distance = results["distances"][0][i]
+        text = results["documents"][0][i]
+        metadata = results["metadatas"][0][i]
+        
+        # --- NEW: Species Alignment Gate ---
+        user_q = hypothesis.lower()
+        # Check both the raw text and the synthesized english text
+        chunk_content = text.lower() + " " + metadata.get("english_synthesis", "").lower()
+        
+        # If farmer asks about shrimp, but the chunk is exclusively about fish, drop it
+        if "shrimp" in user_q and "fish" in chunk_content and "shrimp" not in chunk_content:
+            print(f"[!] Dropping chunk {results['ids'][0][i]} (Species mismatch: expected shrimp, found fish)")
+            continue
+            
+        # If farmer asks about fish, but the chunk is exclusively about shrimp, drop it
+        if "fish" in user_q and "shrimp" in chunk_content and "fish" not in chunk_content:
+            print(f"[!] Dropping chunk {results['ids'][0][i]} (Species mismatch: expected fish, found shrimp)")
+            continue
+
+        # 1. Strict Distance Cutoff
+        if distance > MAX_DISTANCE_THRESHOLD:  
+            print(f"[!] Dropping low-relevance chunk {results['ids'][0][i]} (Distance: {distance:.4f} > {MAX_DISTANCE_THRESHOLD} threshold)")
+            continue
+
+        # 2. Minimum Content Length Filter
+        if len(text.strip()) < 20:
+            print(f"[!] Dropping micro-chunk {results['ids'][0][i]} (Too short for valid evidence)")
+            continue
+
+        evidence.append({
+            "id": results["ids"][0][i],
+            "text": text,
+            "metadata": metadata,
+            "distance": distance
+        })
+
+    return sorted(evidence, key=lambda x: x["distance"])[:top_k]
+
+def evaluate_evidence(hypothesis, evidence_chunks, nli_model):
+    """Evaluates NLI entailment, contradiction, and neutral probabilities using DeBERTa CrossEncoder."""
+    evaluated = []
+    MAX_NLI_WORDS = 50
+    pairs = []
+
+    for chunk in evidence_chunks:
+        words = chunk["text"].split()
+        nli_text = " ".join(words[:MAX_NLI_WORDS])
+        pairs.append([nli_text, hypothesis])
+
+    logits = nli_model.predict(pairs)
+
+    for chunk, logit in zip(evidence_chunks, logits):
+        probabilities = torch.softmax(
+            torch.tensor(logit),
+            dim=0
+        ).tolist()
+
+        result = {
+            **chunk,
+            "contradiction": float(probabilities[0]),
+            "entailment": float(probabilities[1]),
+            "neutral": float(probabilities[2])
+        }
+        evaluated.append(result)
+
+    return evaluated
+
+def make_decision(evaluated_chunks):
+    """
+    Robust Decision Engine: Entailment-first evaluation preventing 
+    background safety chunks from triggering false-positive abstentions.
+    """
+    if not evaluated_chunks:
+        return "CLARIFY"
+
+    # 1. Check for strong direct entailment or close semantic match first.
+    # If any retrieved chunk explicitly matches the symptom/parameter, prioritize answering.
+    valid_answers = [
+        chunk for chunk in evaluated_chunks
+        if chunk.get("entailment", 0.0) >= 0.75 or chunk.get("distance", 1.0) < 0.40
+    ]
+    if valid_answers:
+        return "ANSWER"
+
+    # 2. Only trigger ABSTAIN if there is a severe contradiction 
+    # AND zero valid entailment support across all retrieved chunks.
+    hard_contradictions = [
+        chunk for chunk in evaluated_chunks
+        if chunk.get("contradiction", 0.0) >= 0.90
+    ]
+    if hard_contradictions:
+        return "ABSTAIN"
+
+    # 3. Default fallback if ambiguity remains
+    return "CLARIFY"
+
+def run_diagnostic(hypothesis, embedding_model, nli_model, collection):
+    print(f"\n[?] Input: {hypothesis}")
+
+    # 1. Intent Routing: Separate Information Requests from Diagnostic Symptoms
+    question_keywords = ["how", "what", "why", "method", "way", "steps", "procedure", "increase", "decrease"]
+    is_question = any(kw in hypothesis.lower() for kw in question_keywords)
+
+    print(f"[*] Pipeline Track: {'Informational (Pure RAG)' if is_question else 'Diagnostic (NLI Verified)'}")
+
+    # 2. Retrieve Evidence (BGE-M3 handles dense/sparse intents natively)
+    evidence = retrieve_evidence(hypothesis, embedding_model, collection)
+
+    if not evidence:
+        print("[-] No highly relevant evidence found (Out of Domain). Routing to ABSTAIN.")
+        # FIX: Return ABSTAIN instead of CLARIFY when the query is completely unrelated
+        return {"hypothesis": hypothesis, "decision": "ABSTAIN", "evidence": []}
+
+    if is_question:
+        # Informational Track: Bypass NLI completely.
+        distance = evidence[0]["distance"]
+        
+        # FIX: Informational questions are binary. 
+        # We either have a highly confident answer, or we abstain.
+        # Never ask for water metrics for a general question.
+        if distance < 0.68:  # Slightly relaxed to catch valid aquaculture questions
+            decision = "ANSWER"
+        else:
+            decision = "ABSTAIN"
+        
+        # Inject dummy NLI scores so your response_generator.py UI doesn't crash
+        for chunk in evidence:
+            chunk.update({"entailment": 1.0, "contradiction": 0.0, "neutral": 0.0})
+        evaluated = evidence
+    else:
+        # Diagnostic Track: Strict NLI CrossEncoder Verification for Symptoms
+        print("[*] Running NLI verification...")
+        evaluated = evaluate_evidence(hypothesis, evidence, nli_model)
+        decision = make_decision(evaluated)
+
+    print(f"\n[DECISION] {decision}")
+
+    return {
+        "hypothesis": hypothesis,
+        "decision": decision,
+        "evidence": evaluated
+    }
