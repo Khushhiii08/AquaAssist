@@ -1,3 +1,14 @@
+---
+title: AquaAssist
+emoji: 🐟
+colorFrom: blue
+colorTo: green
+sdk: gradio
+sdk_version: 5.49.1
+app_file: app.py
+pinned: false
+---
+
 # AquaAssist 🦐🐟
 
 **An Evidence-Grounded, Edge-Oriented Aquaculture Decision-Support System with Explicit Safety Handling**
@@ -46,7 +57,7 @@ AquaAssist replaces unrestricted runtime generative text with deterministic extr
 [response_generator.py] ── Stored Expert Advice + Grounded Numerical Telemetry
             │
             ▼
-[Multimodal Output] ───── Streamlit Dashboard / gTTS Audio Output (English & Telugu)
+[Multimodal Output] ───── Gradio Dashboard / edge-tts Audio Output (English & Telugu)
 ```
 
 ---
@@ -61,7 +72,7 @@ AquaAssist replaces unrestricted runtime generative text with deterministic extr
   - **Contradiction Detection**: Halts normal diagnostic processing if conflicting telemetry is supplied (e.g., $\text{DO} = 2.5\text{ mg/L}$ and $8.0\text{ mg/L}$).
 - **NLI Hypothesis Verification**: Does not treat vector similarity as diagnostic proof. A domain-adapted DeBERTa-v3-small Cross-Encoder verifies whether retrieved evidence entails ($\ge 0.75$) or contradicts ($\ge 0.90$) the diagnostic hypothesis.
 - **Zero-Drift Response Construction**: `response_generator.py` binds pre-verified expert advice (curated from 23 aquaculture and veterinary reference manuals) with deterministic boilerplate and explicitly grounded numerical telemetry.
-- **Bilingual & Multimodal Support**: Accommodates voice input (Whisper), English and Telugu text output (with offline NLLB-200 translation), and cached text-to-speech (gTTS with MD5 caching).
+- **Bilingual & Multimodal Support**: Accommodates voice input (Whisper), English and Telugu text output (with offline NLLB-200 translation), and cached text-to-speech (edge-tts with LRU caching).
 
 ---
 
@@ -77,7 +88,7 @@ AquaAssist replaces unrestricted runtime generative text with deterministic extr
 | **Knowledge-Base Prep** | `Qwen-2.5-1.5B` (llama.cpp, GGUF + GBNF) | Offline structured extraction/synthesis (not used at runtime) |
 | **Translation** | `NLLB-200` | Offline English-to-Telugu translation during corpus preparation |
 | **Voice Transcription** | `Whisper` / `faster-whisper` | 16 kHz mono local speech-to-text |
-| **User Interface** | `Streamlit` | Field-facing interactive dashboard |
+| **User Interface** | `Gradio` | Field-facing interactive dashboard |
 
 ---
 
@@ -122,9 +133,9 @@ Experimental evaluation across targeted engineering scenarios (T1–T6) and a 20
    python sync_manager.py --init
    ```
 
-4. **Run the Streamlit Interface:**
+4. **Run the Gradio Interface:**
    ```bash
-   streamlit run app.py
+   python app.py   # serves on http://localhost:7860
    ```
 
 ---
@@ -137,10 +148,8 @@ AquaAssist can be run in a containerized environment, keeping database state dec
 # Build the Docker image
 docker build -t aqua-assist:latest .
 
-# Run the container with mounted ChromaDB volume
-docker run -p 8501:8501 \
-  -v $(pwd)/data/chroma:/app/data/chroma \
-  aqua-assist:latest
+# Run the container (the knowledge base is fetched via OTA from the GitHub release on first boot)
+docker run -p 7860:7860 aqua-assist:latest
 ```
 
 ---

@@ -2,6 +2,7 @@
 __pycache__/
 venv/
 .venv/
+data/
 data/raw_pdfs/
 data/chroma_db/
 temp_audio/

@@ -1,5 +1,7 @@
-streamlit>=1.32.0
-gtts>=2.5.4
+gradio>=5.0.0,<6.0.0
+spaces
+edge-tts>=7.0.0
+huggingface_hub
 chromadb>=0.4.22
 transformers>=4.38.0
 sentence-transformers>=2.5.0

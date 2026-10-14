@@ -9,6 +9,7 @@ __MACOSX/
 .DS_Store
 
 # Data & Databases
+data/
 data/raw_pdfs/
 data/chroma_db/
 data/processed/

@@ -4,21 +4,20 @@ services:
     image: aquaassist:latest
     container_name: aquaassist
     ports:
-      - "8501:8501"
+      - "7860:7860"
     volumes:
       # Large/local assets are mounted instead of baked into the image
       - ./models:/app/models:ro
-      - ./data:/app/data
       - ./temp_audio:/app/temp_audio
       # Persist HuggingFace models (BGE-M3, NLI) so they download only once
       - hf_cache:/root/.cache/huggingface
     restart: unless-stopped
 
-  # Public HTTPS link (trycloudflare.com) -> the Streamlit app. Check `docker logs aquaassist-tunnel` for the URL.
+  # Public HTTPS link (trycloudflare.com) -> the Gradio app. Check `docker logs aquaassist-tunnel` for the URL.
   tunnel:
     image: cloudflare/cloudflared:latest
     container_name: aquaassist-tunnel
-    command: tunnel --no-autoupdate --url http://aquaassist:8501
+    command: tunnel --no-autoupdate --url http://aquaassist:7860
     depends_on:
       - aquaassist
     restart: unless-stopped

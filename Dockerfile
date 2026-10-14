@@ -21,8 +21,8 @@ RUN python -c "import whisper; whisper.load_model('base')"
 # Copy the rest of the application code and the pre-computed ChromaDB
 COPY . .
 
-# Expose Streamlit's default port
-EXPOSE 8501
+# Expose Gradio's port (Hugging Face Spaces default)
+EXPOSE 7860
 
 # Command to boot the application
-CMD ["streamlit", "run", "src/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+CMD ["python", "app.py"]

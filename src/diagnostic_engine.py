@@ -176,41 +176,31 @@ def evaluate_evidence(hypothesis, evidence_chunks, nli_model):
 
 def make_decision(evaluated_chunks):
     """
-    Hybrid Routing Logic: Uses BGE-M3 distance for confident symptom-matching, 
-    and DeBERTa NLI as a safety net for ambiguous queries.
+    Robust Decision Engine: Entailment-first evaluation preventing 
+    background safety chunks from triggering false-positive abstentions.
     """
     if not evaluated_chunks:
         return "CLARIFY"
 
-    # 1. THE CONFIDENCE BYPASS (The Fix)
-    # If BGE-M3 finds an exceptionally strong semantic match (distance < 0.40),
-    # it means the database explicitly recognizes this severe symptom. 
-    # Bypass the NLI contradiction paradox and provide the emergency remedy.
-    high_confidence_matches = [
-        chunk for chunk in evaluated_chunks 
-        if chunk.get("distance", 1.0) < 0.40
-    ]
-    if high_confidence_matches:
-        return "ANSWER"
-
-    # 2. HARD CONTRADICTION (The Safety Net)
-    # If the distance is weak but the statement is highly contradictory 
-    # (e.g., pouring bleach), trigger the safety abort.
-    hard_contradictions = [
-        chunk for chunk in evaluated_chunks
-        if chunk["contradiction"] >= 0.90 
-    ]
-    if hard_contradictions:
-        return "ABSTAIN"
-
-    # 3. STANDARD ENTAILMENT
+    # 1. Check for strong direct entailment or close semantic match first.
+    # If any retrieved chunk explicitly matches the symptom/parameter, prioritize answering.
     valid_answers = [
         chunk for chunk in evaluated_chunks
-        if chunk["entailment"] >= 0.75
+        if chunk.get("entailment", 0.0) >= 0.75 or chunk.get("distance", 1.0) < 0.40
     ]
     if valid_answers:
         return "ANSWER"
 
+    # 2. Only trigger ABSTAIN if there is a severe contradiction 
+    # AND zero valid entailment support across all retrieved chunks.
+    hard_contradictions = [
+        chunk for chunk in evaluated_chunks
+        if chunk.get("contradiction", 0.0) >= 0.90
+    ]
+    if hard_contradictions:
+        return "ABSTAIN"
+
+    # 3. Default fallback if ambiguity remains
     return "CLARIFY"
 
 def run_diagnostic(hypothesis, embedding_model, nli_model, collection):

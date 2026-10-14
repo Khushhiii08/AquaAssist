@@ -23,7 +23,7 @@ def standardize_audio_for_whisper(raw_audio_path):
         subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         return processed_path if os.path.exists(processed_path) else raw_audio_path
     except FileNotFoundError:
-        # Prevents crashing if the user runs Streamlit locally on Windows before building the Docker image
+        # Prevents crashing if the user runs the app locally on Windows before building the Docker image
         print("[!] WARNING: FFmpeg not found on host machine! Skipping resampling. Ensure you use Docker for production.")
         return raw_audio_path
     except Exception as e:
