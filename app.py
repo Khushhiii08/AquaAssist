@@ -15,6 +15,7 @@ import sys
 import copy
 import glob
 import types
+import torch
 import asyncio
 import hashlib
 import tempfile
@@ -25,6 +26,11 @@ from typing import Dict, Any, List, Optional, Tuple
 
 import gradio as gr
 import edge_tts
+
+# Prevent CPU thread contention on Hugging Face Spaces 2 vCPU tier
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["MKL_NUM_THREADS"] = "2"
+torch.set_num_threads(2)
 
 # Path initialization
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))

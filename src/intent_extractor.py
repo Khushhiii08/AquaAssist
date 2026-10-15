@@ -275,14 +275,11 @@ def extract_hypothesis(farmer_query: str, session_state: Optional[Dict[str, Any]
     cleaned_query = normalize_input(farmer_query)
     
     if session_state is None:
-        session_state = {
-            "symptoms": set(),
-            "species": None,
-            "habitat": None,
-            "telemetry": {},         # Structured telemetry lists: {"DO": [{"value": 2.0, "unit": "mg/L"}]}
-            "pending_metrics": None,
-            "last_query": ""
-        }
+        session_state = {}
+    if "telemetry" not in session_state:
+        session_state["telemetry"] = {}
+    if "symptoms" not in session_state:
+        session_state["symptoms"] = []
 
     doc = nlp(cleaned_query)
 
@@ -339,7 +336,7 @@ def extract_hypothesis(farmer_query: str, session_state: Optional[Dict[str, Any]
     symptom_str = ", ".join(session_state["symptoms"]) if session_state["symptoms"] else "water quality disturbance"
     
     telemetry_parts = []
-    for param_name, records in session_state["telemetry"].items():
+    for param_name, records in session_state.get("telemetry", {}).items():
         if isinstance(records, list):
             for r in records:
                 telemetry_parts.append(f"{param_name} {r['value']} {r['unit']}".strip())

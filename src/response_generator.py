@@ -33,8 +33,10 @@ def get_slm():
             print(f"[*] Loading Qwen 2.5 SLM from {MODEL_PATH}...")
             _LLM_INSTANCE = Llama(
                 model_path=MODEL_PATH,
+                n_threads=2,
+                n_batch=512,
                 n_ctx=2048,
-                n_gpu_layers=-1 if DEVICE in ("mps", "cuda") else 0,
+                n_gpu_layers=0,  # Stable across all platforms and test suites
                 verbose=False
             )
         else:
@@ -72,17 +74,27 @@ def translate_to_telugu(english_text: str) -> str:
         return "తెలుగు అనువాదం అందుబాటులో లేదు."
 
     try:
-        inputs = tokenizer(english_text, return_tensors="pt", max_length=384, truncation=True).to(DEVICE)
+        # Cap English input length to avoid translating excessive text on CPU
+        inputs = tokenizer(
+            english_text, 
+            return_tensors="pt", 
+            max_length=200, 
+            truncation=True
+        ).to(DEVICE)
+        
         forced_bos = tokenizer.convert_tokens_to_ids("tel_Telu")
         
-        # Greedy decoding (num_beams=1) reduces latency by ~4x compared to beam search
+        # Fast greedy decoding on 2-vCPU edge nodes:
+        # 1. Use max_new_tokens (not max_tokens)
+        # 2. early_stopping=True stops generating immediately when EOS is emitted
         with torch.no_grad():
             tokens = model.generate(
                 **inputs,
                 forced_bos_token_id=forced_bos,
-                max_length=384,
+                max_new_tokens=100,
                 num_beams=1,
-                do_sample=False
+                do_sample=False,
+                early_stopping=True
             )
         raw_translation = tokenizer.batch_decode(tokens, skip_special_tokens=True)[0].strip()
 
@@ -98,7 +110,6 @@ def translate_to_telugu(english_text: str) -> str:
     except Exception as e:
         print(f"[!] Translation error: {e}")
         return "తెలుగు అనువాదంలో లోపం ఏర్పడింది."
-
 
 def format_evidence_context(evidence_list: List[Dict[str, Any]], max_chunks: int = 3, max_words_per_chunk: int = 150) -> str:
     """
