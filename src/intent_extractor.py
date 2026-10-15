@@ -24,6 +24,9 @@ PARAMETER_LEMMA_MAP = {
     "d.o.": "DO",
     "d0": "DO",
     "o2": "DO",
+    "dissolved oxygen": "DO",
+    "probe": "DO",  
+    "meter": "DO",  
     "hypoxia": "DO",
     # pH / Acidity
     "ph": "pH",
@@ -175,21 +178,32 @@ def extract_telemetry(doc: spacy.tokens.Doc, pending_metrics: Optional[List[str]
                         if w in PARAMETER_LEMMA_MAP:
                             param_key = PARAMETER_LEMMA_MAP[w]
                             break
-                        # Also check raw token text
                         raw_w = doc[idx].text.lower().rstrip(":")
                         if raw_w in PARAMETER_LEMMA_MAP:
                             param_key = PARAMETER_LEMMA_MAP[raw_w]
                             break
 
+            # Look ahead across tokens to reconstruct split units (e.g., ['mg', '/', 'l'] -> 'mg/l')
+            window_slice = doc[token.i + 1 : min(len(doc), token.i + 5)]
+            forward_text = "".join(t.text.lower() for t in window_slice)
+
+            # Unit-deduction fallback (resolves "reads 7.2 mg/L" when DO is omitted)
+            if not param_key:
+                if forward_text.startswith(("mg/l", "ppm", "mg/lt", "mg")):
+                    param_key = "DO"
+                elif forward_text.startswith(("ppt", "psu")):
+                    param_key = "salinity"
+                elif forward_text.startswith(("c", "°c", "celsius")):
+                    param_key = "temperature"
+
             if param_key:
                 unit = DEFAULT_UNITS.get(param_key, "")
-                # Check for unit in next 2 tokens
-                for off in (1, 2):
-                    if token.i + off < len(doc):
-                        next_word = doc[token.i + off].text.lower()
-                        if next_word in UNIT_NORMALIZATION:
-                            unit = UNIT_NORMALIZATION[next_word]
-                            break
+                if forward_text.startswith(("mg/l", "ppm", "mg/lt")):
+                    unit = "mg/L"
+                elif forward_text.startswith(("ppt", "psu")):
+                    unit = "ppt"
+                elif forward_text.startswith(("c", "°c", "celsius")):
+                    unit = "°C"
 
                 telemetry.append({
                     "parameter": param_key,
@@ -301,14 +315,19 @@ def extract_hypothesis(farmer_query: str, session_state: Optional[Dict[str, Any]
         session_state["pending_metrics"] = None
         if "telemetry" not in session_state or not isinstance(session_state["telemetry"], dict):
             session_state["telemetry"] = {}
-            
+
+        # Group metrics extracted strictly within THIS turn
+        current_turn_metrics = {}
         for item in extracted_telemetry:
             p_name = item["parameter"]
             record = {"value": item["value"], "unit": item["unit"]}
-            
-            if p_name not in session_state["telemetry"] or not isinstance(session_state["telemetry"][p_name], list):
-                session_state["telemetry"][p_name] = []
-            session_state["telemetry"][p_name].append(record)
+            if p_name not in current_turn_metrics:
+                current_turn_metrics[p_name] = []
+            current_turn_metrics[p_name].append(record)
+
+        # Overwrite previous turn readings with fresh turn readings (fixes T11 persistent state loop)
+        for p_name, records in current_turn_metrics.items():
+            session_state["telemetry"][p_name] = records
     
     # 3. Clinical Symptoms
     symptoms = extract_clinical_symptoms(doc)
@@ -331,9 +350,22 @@ def extract_hypothesis(farmer_query: str, session_state: Optional[Dict[str, Any]
         search_prompt = f"{cleaned_query}{qualifier}"
         return search_prompt, session_state
 
-    # Diagnostic / Emergency Telemetry (T4, T11)
-    target_entity = session_state.get("species") or "aquatic stock"
-    symptom_str = ", ".join(session_state["symptoms"]) if session_state["symptoms"] else "water quality disturbance"
+    # Diagnostic / Telemetry Prompt Formulation
+    target_entity = session_state.get("species") or "fish and shrimp"
+    has_explicit_symptoms = bool(session_state.get("symptoms"))
+    
+    # Check if DO is optimal (>= 5.0 mg/L)
+    do_records = session_state.get("telemetry", {}).get("DO", [])
+    valid_do = [r["value"] for r in do_records if isinstance(r, dict) and r.get("value") is not None]
+    is_healthy_do = bool(valid_do and min(valid_do) >= 5.0)
+
+    if has_explicit_symptoms:
+        symptom_str = ", ".join(session_state["symptoms"])
+        status_phrase = f"showing {symptom_str}"
+    elif is_healthy_do:
+        status_phrase = "optimal dissolved oxygen water quality management"
+    else:
+        status_phrase = "water quality management"
     
     telemetry_parts = []
     for param_name, records in session_state.get("telemetry", {}).items():
@@ -344,7 +376,6 @@ def extract_hypothesis(farmer_query: str, session_state: Optional[Dict[str, Any]
             telemetry_parts.append(f"{param_name} {records['value']} {records['unit']}".strip())
         
     telemetry_str = f" with {', '.join(telemetry_parts)}" if telemetry_parts else ""
-    search_prompt = f"{target_entity.capitalize()} showing {symptom_str}{telemetry_str}."
+    search_prompt = f"{target_entity.capitalize()} {status_phrase}{telemetry_str}."
     
     return search_prompt, session_state
-

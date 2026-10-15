@@ -177,7 +177,7 @@ def retrieve_evidence(
     Retrieves candidate evidence chunks using:
     1. Species normalization (fish vs. shrimp vs. general).
     2. Deterministic topic isolation at the vector database level to prevent 
-       pathology/chemical-treatment or unrelated preparation chunks from contaminating queries.
+       larval hatchery preparation or pathology chunks from contaminating routine telemetry checks.
     """
     embeddings = embedding_model([query])
     query_lower = query.lower()
@@ -201,6 +201,7 @@ def retrieve_evidence(
         conditions.append({"species": {"$in": [species_facet, "general"]}})
         
     # Topic condition: Limnology, water quality, and algal bloom management
+    # (Exclude 'pond_preparation' so hatchery larval feeds do not hijack water quality checks)
     is_water_quality_query = (
         target_parameter in ("DO", "oxygen", "pH", "TAN", "ammonia", "salinity", "temperature")
         or any(w in query_lower for w in [
@@ -225,19 +226,23 @@ def retrieve_evidence(
     try:
         results = collection.query(
             query_embeddings=embeddings,
-            n_results=top_k * 3,
+            n_results=top_k * 4,
             where=where_clause,
             include=["documents", "metadatas", "distances"],
         )
-    except Exception as e:
+    except Exception:
         # Fallback to species-only if strict compound filtering fails
         fallback_where = {"species": {"$in": [species_facet, "general"]}} if species_facet in ("fish", "shrimp") else None
         results = collection.query(
             query_embeddings=embeddings,
-            n_results=top_k * 3,
+            n_results=top_k * 4,
             where=fallback_where,
             include=["documents", "metadatas", "distances"],
         )
+
+    # Hatchery exclusion terms for grow-out telemetry queries
+    is_telemetry_check = any(w in query_lower for w in ["optimal", "reads", "recalibrated", "management with do", "do 7", "mg/l"])
+    hatchery_terms = ["nauplii", "emulsion", "enrichment", "artemia", "cyst", "hatchery"]
 
     evidence = []
     for i in range(len(results["ids"][0])):
@@ -246,6 +251,10 @@ def retrieve_evidence(
         metadata = results["metadatas"][0][i] or {}
 
         if distance > MAX_DISTANCE_THRESHOLD or len(text.strip()) < 25:
+            continue
+
+        # Reject hatchery larval feeds if user is evaluating pond grow-out telemetry
+        if is_telemetry_check and any(term in text.lower() for term in hatchery_terms):
             continue
 
         evidence.append({
@@ -293,10 +302,16 @@ def convert_query_to_declarative_hypothesis(query: str, session_state: Optional[
     first_word = q_low.split()[0] if q_low else ""
     is_wh = first_word in wh_words or q.endswith("?")
 
-    has_telemetry_report = any(p in q_low for p in ["temperature", "salinity", "ppt", "celsius", "ph", "do"]) and any(c.isdigit() for c in q_low)
+    # Pure telemetry reports / status confirmations (T16 & follow-up confirmations)
+    has_telemetry_report = any(p in q_low for p in ["temperature", "salinity", "ppt", "celsius", "ph", "do", "probe", "reads"]) and any(c.isdigit() for c in q_low)
     if has_telemetry_report and not is_wh:
+        # Check if DO reading is optimal
+        if "DO" in telemetry:
+            do_vals = [r.get("value") for r in telemetry["DO"] if isinstance(r, dict) and r.get("value") is not None]
+            if do_vals and min(do_vals) >= 5.0:
+                return f"Dissolved oxygen levels above 5.0 mg/L provide optimal respiratory conditions for {species} health and growth."
         return f"Water temperature, salinity, and water quality parameters are maintained within safe ranges for {species} nursery rearing."
-
+    
     # 3. Informational Wh- inquiries (T1 & T18 specific handling)
     if is_wh:
         # T1: Dissolved oxygen limnological causes

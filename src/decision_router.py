@@ -68,12 +68,20 @@ def is_aquaculture_domain(doc: spacy.tokens.Doc) -> bool:
     """Tier 1 Gate: Confirms the inquiry belongs strictly to aquaculture."""
     text_lower = doc.text.lower()
     
-    # Check terrestrial exclusion markers
+    # Check terrestrial exclusion markers (Guards T3 crop fertilizers)
     terrestrial_markers = ["wheat", "paddy", "rice", "cotton", "sugarcane", "maize", "crop", "tractor", "potash"]
     if any(re.search(rf"\b{m}\b", text_lower) for m in terrestrial_markers):
         # Allow if pond/aquaculture is explicitly co-present
         if not any(aq in text_lower for aq in ["pond", "fish", "shrimp", "aquaculture"]):
             return False
+
+    # Water-quality sensor & telemetry invariant (Fixes T11 Turn 2):
+    # Readings containing limnological units/metrics are inherently in-domain
+    has_telemetry_reading = any(c.isdigit() for c in text_lower) and any(
+        u in text_lower for u in ["mg/l", "ppm", "ppt", "ph", "probe", "meter", "titration", "reads", "recalibrated"]
+    )
+    if has_telemetry_reading:
+        return True
 
     lemmas = {token.lemma_.lower() for token in doc}
     words = {token.text.lower() for token in doc}

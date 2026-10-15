@@ -88,6 +88,14 @@ def new_diagnostic_state() -> Dict[str, Any]:
 
 def resolve_conversational_coreference(current_query: str, session_history: List[Dict[str, str]], state: Dict[str, Any]) -> str:
     q_low = current_query.strip().lower()
+    
+    # Invariant: If the farmer is reporting numerical readings or calibration updates, DO NOT rewrite as an elliptical question!
+    has_telemetry_reading = any(char.isdigit() for char in q_low) and any(
+        u in q_low for u in ["mg/l", "ppm", "ppt", "ph", "reads", "reading", "probe", "meter"]
+    )
+    if has_telemetry_reading:
+        return current_query
+
     pronoun_markers = {"that", "it", "this", "these", "those", "about that", "do now", "what now", "remedy", "fix it"}
     words = q_low.split()
     is_elliptical = len(words) <= 6 or any(p in q_low for p in pronoun_markers)
@@ -279,22 +287,42 @@ def run_aquaassist_pipeline(
     resolved_query = resolve_conversational_coreference(farmer_query, session_history or [], diag_state)
     
     # Step 3: Policy & Safety Router (Tier 1 to Tier 4)
-    policy_status, policy_key = route_query_policy(resolved_query)
+    # Check policy on actual user input to avoid false triggers from coreference expansions
+    policy_status, policy_key = route_query_policy(farmer_query)
     if policy_status == "POLICY_INTERCEPT" and policy_key:
         rendered = render_policy_response(policy_key)
         out["response"] = rendered["message"]
         out["debug"] = _format_debug(farmer_query, f"Policy Gate: {policy_key}", [], diag_state)
         return out
 
-    # Step 4: Linguistic Intent & Telemetry Extraction (Phase 1)Extract current turn metrics from raw user input, and build search prompt from resolved query
-    _, current_turn_state = extract_hypothesis(farmer_query, session_state=copy.deepcopy(diag_state))
-    has_fresh_telemetry = bool(current_turn_state.get("telemetry") and current_turn_state["telemetry"] != diag_state.get("telemetry"))
+    # -------------------------------------------------------------------------
+    # Step 4: Linguistic Intent & Telemetry Extraction (Multi-Turn Safe)
+    # -------------------------------------------------------------------------
+    # 1. Parse the RAW farmer input to extract telemetry belonging ONLY to this turn.
+    #    (Using resolved_query here causes historical numbers like 1.8 and 7.5 to re-enter!)
+    search_prompt, fresh_turn_state = extract_hypothesis(farmer_query, session_state=copy.deepcopy(diag_state))
+    fresh_telemetry = fresh_turn_state.get("telemetry", {})
 
-    search_prompt, updated_state = extract_hypothesis(resolved_query, session_state=diag_state)
+    # 2. Check if the farmer actually provided new readings in this turn
+    #    Compare against what was previously stored in diag_state
+    old_telemetry = diag_state.get("telemetry", {})
+    has_fresh_telemetry = bool(fresh_telemetry and fresh_telemetry != old_telemetry)
+
+    # 3. Update the state
+    updated_state = fresh_turn_state
+    if has_fresh_telemetry:
+        # User supplied fresh readings: clear any old conflict lists and update with new readings
+        updated_state["telemetry"] = fresh_telemetry
+        updated_state["fresh_telemetry_in_turn"] = True
+    else:
+        updated_state["fresh_telemetry_in_turn"] = False
+
     species = updated_state.get("species")
     out["state"] = updated_state
 
-    # Step 5: Telemetry Health, Conflict & Emergency Gate (T4, T11)
+   # -------------------------------------------------------------------------
+    # Step 5: Telemetry Health, Conflict & Emergency Gate (T4, T11, T14)
+    # -------------------------------------------------------------------------
     is_critical, decision_flag, detail = evaluate_telemetry_health_and_conflicts(updated_state)
     if is_critical and decision_flag:
         # Only fire acute alarm if current turn provided a fresh lethal reading
@@ -323,6 +351,46 @@ def run_aquaassist_pipeline(
             out["response"] = f"**{detail}**\n\n{rendered['message']}"
             out["debug"] = _format_debug(farmer_query, f"Conflict: {detail}", [], updated_state)
             return out
+    
+    # -------------------------------------------------------------------------
+    # Step 5b: Optimal Telemetry Confirmation Fast-Path (Fixes T11 Turn 2 Abstention)
+    # -------------------------------------------------------------------------
+    telemetry = updated_state.get("telemetry", {})
+    symptoms = updated_state.get("symptoms", set())
+    has_symptoms = bool(symptoms)
+
+    do_records = telemetry.get("DO", [])
+    if not isinstance(do_records, list):
+        do_records = [do_records]
+    valid_do = [r["value"] for r in do_records if isinstance(r, dict) and r.get("value") is not None]
+
+    # If Dissolved Oxygen is optimal (>= 5.0 mg/L) with zero pathological signs, confirm immediately
+    if valid_do and min(valid_do) >= 5.0 and not has_symptoms and not is_critical:
+        do_val = valid_do[-1]
+        species_target = species or "finfish and shrimp"
+        organism_te = "చేపలు మరియు రొయ్యల" if not species else ("చేపల" if species == "fish" else "రొయ్యల")
+
+        msg_en = (
+            f"✅ **OPTIMAL PARAMETER CONFIRMED: Dissolved Oxygen is {do_val} mg/L.**\n\n"
+            f"• **Status:** The reported DO level is in the safe, optimal range (> 5.0 mg/L) for {species_target} grow-out ponds.\n"
+            f"• **Operational Protocol:** Continue routine water quality monitoring. Maintain regular aerator schedules during night and early morning hours when biological oxygen demand peaks."
+        )
+        msg_te = (
+            f"✅ **సరైన కొలత నిర్ధారించబడింది: కరిగిన ఆక్సిజన్ (DO) {do_val} mg/L.**\n\n"
+            f"• **స్థితి:** ఈ ఆక్సిజన్ స్థాయి {organism_te} చెరువులకు అత్యంత అనుకూలమైన మరియు సురక్షితమైన పరిధిలో (> 5.0 mg/L) ఉంది.\n"
+            f"• **సాంకేతిక సలహా:** సాధారణ రోజువారీ పర్యవేక్షణను కొనసాగించండి. ఆక్సిజన్ వినియోగం ఎక్కువగా ఉండే రాత్రి మరియు తెల్లవారుజాము వేళల్లో షెడ్యూల్ ప్రకారం ఏరేటర్లను నిర్వహించండి."
+        )
+
+        out["response"] = f"{msg_en}\n\n---\n{msg_te}"
+        out["report"] = (
+            "=== AquaAssist Diagnostic Log ===\n"
+            f"Query: {farmer_query}\n"
+            f"Target Organism: {species_target}\n"
+            f"Parameters: DO = {do_val} mg/L (Safe/Optimal)\n\n"
+            f"{msg_en}\n\n{msg_te}"
+        )
+        out["debug"] = _format_debug(farmer_query, f"Fast-Path: Optimal DO Confirmation ({do_val} mg/L)", [], updated_state)
+        return out
 
     # Step 6: ChromaDB Retrieval & Grounded NLI Verification
     embedding_model, nli_model, collection = get_diagnostic_engine()
