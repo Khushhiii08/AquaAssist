@@ -1,102 +1,147 @@
+"""
+AquaAssist: Safe Pointer-Based Database Synchronization
+Resolves Windows file-locking [WinError 32] by using versioned directories
+and an atomic pointer file rather than in-place folder deletion.
+"""
+
 import os
-import shutil
+import json
 import zipfile
 import urllib.request
-import json
 import ssl
+import shutil
+from typing import Tuple, Optional
 
-def get_latest_github_release_url(repo_path="Khushhiii08/AquaAssist", asset_name="chroma_db.zip"):
-    """
-    Queries the GitHub API for the latest release and returns the download URL,
-    with SSL bypass for local Mac/Docker development.
-    """
-    api_url = f"https://api.github.com/repos/{repo_path}/releases/latest"
-    
-    try:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+POINTER_FILE = os.path.join(DATA_DIR, "active_db.json")
 
-        req = urllib.request.Request(api_url, headers={'User-Agent': 'AquaAssist-Edge-Device'})
-        
-        with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
-            data = json.loads(response.read().decode())
-            for asset in data.get('assets', []):
-                if asset.get('name') == asset_name:
-                    return asset.get('browser_download_url')
-                    
-        return None
-    except Exception as e:
-        print(f"[!] GitHub API Fetch Error: {e}")
-        return None
 
-def download_and_apply_ota_update(url, target_dir="data/chroma_db"):
-    """
-    Downloads and extracts a ZIP archive from GitHub Releases to the target directory,
-    with SSL bypass and safe chunking for large model binaries (e.g., 473MB NLI router).
-    """
-    try:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-
-        release_tag = "Latest"
+def get_active_db_path() -> str:
+    """Returns the path to the currently active ChromaDB directory."""
+    if os.path.exists(POINTER_FILE):
         try:
-            tag_req = urllib.request.Request("https://github.com/Khushhiii08/AquaAssist/releases/latest", method="HEAD", headers={'User-Agent': 'AquaAssist'})
-            tag_resp = urllib.request.urlopen(tag_req, context=ctx, timeout=15)
-            release_tag = tag_resp.url.split('/')[-1]
-        except Exception as e:
-            print(f"[!] Tag fetch failed: {e}")
+            with open(POINTER_FILE, "r") as f:
+                data = json.load(f)
+                active_dir = data.get("active_dir")
+                if active_dir and os.path.exists(os.path.join(DATA_DIR, active_dir)):
+                    return os.path.join(DATA_DIR, active_dir)
+        except Exception:
+            pass
+    # Default initial path
+    return os.path.join(DATA_DIR, "chroma_db")
 
-        req = urllib.request.Request(url, headers={'User-Agent': 'AquaAssist'})
-        temp_zip = "temp_ota.zip"
-        
-        print(f"[*] Downloading {url} to {target_dir} (this may take a moment for large assets)...")
-        
-        # 300-second (5 min) timeout to accommodate large model weights safely
+
+def set_active_db_path(version_dir_name: str) -> None:
+    """Atomically updates the active database pointer."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    temp_pointer = POINTER_FILE + ".tmp"
+    with open(temp_pointer, "w") as f:
+        json.dump({"active_dir": version_dir_name}, f)
+    # Atomic rename of pointer file
+    if os.path.exists(POINTER_FILE):
+        os.remove(POINTER_FILE)
+    os.rename(temp_pointer, POINTER_FILE)
+
+
+def download_and_apply_ota_update(url: str, target_dir: Optional[str] = None, max_retries: int = 3) -> Tuple[bool, str]:
+    """
+    If target_dir is specified (e.g. models/deberta_aquaculture_router), extracts directly there.
+    If target_dir is None, treats it as a ChromaDB update and applies blue/green pointer rotation.
+    """
+    import time
+    
+    # CASE 1: Model Binary Updates (DeBERTa Router)
+    if target_dir:
+        os.makedirs(target_dir, exist_ok=True)
+        temp_zip = "temp_model_ota.zip"
+        try:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            req = urllib.request.Request(url, headers={'User-Agent': 'AquaAssist-OTA'})
+            with urllib.request.urlopen(req, context=ctx, timeout=300) as response:
+                if response.status != 200:
+                    return False, f"HTTP {response.status}"
+                with open(temp_zip, "wb") as f:
+                    while True:
+                        chunk = response.read(1024 * 1024)
+                        if not chunk: break
+                        f.write(chunk)
+            
+            with zipfile.ZipFile(temp_zip, 'r') as z:
+                z.extractall(target_dir)
+            return True, f"Model extracted to {target_dir} successfully."
+        except Exception as e:
+            return False, f"Model OTA Error: {e}"
+        finally:
+            if os.path.exists(temp_zip):
+                os.remove(temp_zip)
+
+    # CASE 2: ChromaDB Vector Knowledge Base Updates (Blue/Green Switch)
+    timestamp = int(time.time())
+    new_version_name = f"chroma_db_v{timestamp}"
+    new_target_dir = os.path.join(DATA_DIR, new_version_name)
+    temp_zip = os.path.join(DATA_DIR, "temp_ota_update.zip")
+
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        req = urllib.request.Request(url, headers={'User-Agent': 'AquaAssist-OTA'})
+        print(f"[*] Downloading knowledge base update to {new_version_name}...")
+
         with urllib.request.urlopen(req, context=ctx, timeout=300) as response:
             if response.status != 200:
-                return False, f"Download failed with status: {response.status}"
-                
-            # Stream-read in chunks to prevent memory spikes
+                return False, f"HTTP error {response.status}"
             with open(temp_zip, "wb") as f:
                 while True:
-                    chunk = response.read(1024 * 1024) # 1MB chunks
+                    chunk = response.read(1024 * 1024)
                     if not chunk:
                         break
                     f.write(chunk)
 
         if not zipfile.is_zipfile(temp_zip):
-            return False, "Downloaded file is corrupted or not a valid ZIP."
+            return False, "Downloaded archive is corrupted."
 
-        if os.path.exists(target_dir):
-            shutil.rmtree(target_dir)
-        os.makedirs(target_dir, exist_ok=True)
+        # Extract to new version directory
+        os.makedirs(new_target_dir, exist_ok=True)
+        with zipfile.ZipFile(temp_zip, 'r') as z:
+            z.extractall(new_target_dir)
 
-        print(f"[*] Extracting archive into {target_dir}...")
-        with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
-            zip_ref.extractall(target_dir)
-            
-        os.remove(temp_zip)
+        # Handle nested zip extraction if parent directory was packaged
+        subdirs = [d for d in os.listdir(new_target_dir) if os.path.isdir(os.path.join(new_target_dir, d))]
+        if len(subdirs) == 1 and subdirs[0] in ("chroma_db", "data"):
+            nested_path = os.path.join(new_target_dir, subdirs[0])
+            for item in os.listdir(nested_path):
+                shutil.move(os.path.join(nested_path, item), new_target_dir)
+            os.rmdir(nested_path)
+
+        # Integrity Check: verify chroma.sqlite3 exists in package
+        has_sqlite = False
+        for root, _, files in os.walk(new_target_dir):
+            if "chroma.sqlite3" in files:
+                has_sqlite = True
+                break
         
-        # --- ANTI-NESTING FIX ---
-        base_folder_name = os.path.basename(target_dir)
-        nested_dir = os.path.join(target_dir, base_folder_name)
-        if os.path.exists(nested_dir) and os.path.isdir(nested_dir):
-            for item in os.listdir(nested_dir):
-                shutil.move(os.path.join(nested_dir, item), target_dir)
-            os.rmdir(nested_dir)
-            
-        macosx_dir = os.path.join(target_dir, "__MACOSX")
-        if os.path.exists(macosx_dir):
-            shutil.rmtree(macosx_dir)
-        
-        return True, f"Updated {target_dir} successfully from GitHub! (Release: {release_tag})"
-        
+        if not has_sqlite:
+            shutil.rmtree(new_target_dir, ignore_errors=True)
+            return False, "Database verification failed: chroma.sqlite3 missing."
+
+        # Atomically point active DB to new version
+        set_active_db_path(new_version_name)
+        print(f"[+] Successfully switched active database to: {new_version_name}")
+        return True, "Knowledge base synchronized and activated successfully."
+
     except Exception as e:
-        if os.path.exists("temp_ota.zip"):
+        if os.path.exists(new_target_dir):
+            shutil.rmtree(new_target_dir, ignore_errors=True)
+        return False, f"OTA Sync Failure: {e}"
+    finally:
+        if os.path.exists(temp_zip):
             try:
-                os.remove("temp_ota.zip")
+                os.remove(temp_zip)
             except OSError:
                 pass
-        return False, f"OTA Sync Error: {e}"

@@ -1,3 +1,4 @@
+cat << 'EOF' > .gitignore
 # Python environments & cache
 venv/
 .venv/
@@ -12,21 +13,21 @@ __MACOSX/
 data/
 data/raw_pdfs/
 data/chroma_db/
+data/chroma_db_*
+data/active_db.json
 data/processed/
 data/evaluation/
-*.zip
+temp_ota_update.zip
+chroma_db.zip
 
-# Machine Learning Models (Heavy weights - strictly blocked)
-models/
-*.gguf
-*.bin
-*.safetensors
-*.pt
+# Model weights & binaries
+models/*.gguf
+models/*.bin
+models/deberta_aquaculture_router/
 
-# Audio & Media
+# Audio cache
 temp_audio/
-*.wav
-*.mp3
+temp_16khz_mono.wav
 
 # OS-Specific Compiled Binaries
 bin/
@@ -35,3 +36,4 @@ bin/
 retrieval_output.txt
 *.xlsx
 *.csv
+EOF
