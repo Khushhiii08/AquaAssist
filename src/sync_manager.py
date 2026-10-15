@@ -80,13 +80,16 @@ def download_and_apply_ota_update(url: str, target_dir: Optional[str] = None, ma
             with zipfile.ZipFile(temp_zip, 'r') as z:
                 z.extractall(target_dir)
 
-            # Handle single top-level directory nesting if zipped as folder
-            subdirs = [d for d in os.listdir(target_dir) if os.path.isdir(os.path.join(target_dir, d))]
-            if len(subdirs) == 1 and subdirs[0] == os.path.basename(target_dir):
+            # Fix nested folder issue: if target_dir contains a single subfolder containing config.json
+            entries = os.listdir(target_dir)
+            subdirs = [d for d in entries if os.path.isdir(os.path.join(target_dir, d))]
+            if len(subdirs) == 1 and not os.path.exists(os.path.join(target_dir, "config.json")):
                 nested_dir = os.path.join(target_dir, subdirs[0])
-                for item in os.listdir(nested_dir):
-                    shutil.move(os.path.join(nested_dir, item), target_dir)
-                os.rmdir(nested_dir)
+                if os.path.exists(os.path.join(nested_dir, "config.json")):
+                    print(f"[*] Unnesting files from {nested_dir} to {target_dir}...")
+                    for item in os.listdir(nested_dir):
+                        shutil.move(os.path.join(nested_dir, item), target_dir)
+                    os.rmdir(nested_dir)
 
             return True, f"Model extracted to {target_dir} successfully."
         except Exception as e:
