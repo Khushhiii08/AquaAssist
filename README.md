@@ -76,7 +76,7 @@ AquaAssist replaces unconstrained LLM hallucinations with a **Dual-Path Neuro-Sy
 ---
 
 ## Directory Structure
-
+```text
 AquaAssist/
 ├── app.py                      # Gradio multi-turn UI & orchestration pipeline
 ├── constraints.gbnf            # Strict GBNF grammar rules for SLM generation
@@ -93,7 +93,7 @@ AquaAssist/
 ├── data/
 │   └── chroma_db/              # Indexed vector database (1,971 semantic chunks)
 └── models/                     # GGUF models & DeBERTa router checkpoints
-
+```
 
 ---
 
