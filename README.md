@@ -9,156 +9,134 @@ app_file: app.py
 pinned: false
 ---
 
-# AquaAssist 🦐🐟
+# AquaAssist: Neuro-Symbolic Edge Aquaculture Diagnostic System
 
-**An Evidence-Grounded, Edge-Oriented Aquaculture Decision-Support System with Explicit Safety Handling**
+[![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-blue)](https://huggingface.co/spaces)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
----
-
-## 📌 Overview
-
-In rural aquaculture, farmers frequently encounter rapid water-quality shifts (such as critical dissolved oxygen depletion and pH fluctuations) and aquatic disease outbreaks under limited or unreliable internet connectivity. While conventional monitoring systems stop at raw sensor alerts and general-purpose large language models often hallucinate risky, ungrounded domain advice, **AquaAssist** delivers a local-first, evidence-grounded diagnostic workflow tailored for resource-constrained edge hardware.
-
-AquaAssist separates offline knowledge-base preparation from an ultra-safe, deterministic farmer-facing diagnostic runtime. It implements a rigorous **Retrieve $\rightarrow$ Verify $\rightarrow$ Decide $\rightarrow$ Construct** pipeline that enforces biological boundaries, resolves conversational context, verifies candidate evidence via Natural Language Inference (NLI), and selectively routes actions into three explicit states: **ANSWER**, **CLARIFY**, or **ABSTAIN**.
+**AquaAssist** is an offline-first, vernacular neuro-symbolic clinical diagnostic and water-quality decision engine for aquaculture pond managers (finfish and brackishwater shrimp). It couples deterministic symbolic guardrails (safety gates, telemetry bounds, syntactic dependency trees, and directional NLI verification) with neural language and speech processing (Qwen 2.5 SLM, Whisper.cpp, and NLLB-200).
 
 ---
 
-## 🏗️ System Architecture
+## System Architecture
 
-AquaAssist replaces unrestricted runtime generative text with deterministic extraction and cross-encoder hypothesis verification:
+AquaAssist replaces unconstrained LLM hallucinations with a **Dual-Path Neuro-Symbolic Pipeline**:
 
-```
-[Farmer Query (Voice / Text)]
-            │
-            ▼
-[Whisper STT (16 kHz)] / Text Input
-            │
-            ▼
-[intent_extractor.py] ─── (Regex + Entity Heuristics)
-            │
-            ├──► Critical Telemetry Check (DO < 3.0 ppm) ──► [EMERGENCY BYPASS]
-            ├──► Biological Boundary Guardrails (pH 4.0–11.0, DO > 20.0 ppm)
-            │
-            ▼
-[Candidate Retrieval] ─── BAAI/bge-m3 (1024-dim) + ChromaDB
-            │
-            ├──► Distance & Species Filtering (Distance > 0.80 rejected; species-aligned)
-            │
-            ▼
-[Safety Verification] ─── DeBERTa-v3-small Cross-Encoder (NLI)
-            │             (Entailment, Neutral, Contradiction)
-            ▼
-[Decision Routing Logic]
-    ├── ANSWER   ── (Entailment >= 0.75, fully grounded by evidence)
-    ├── CLARIFY  ── (Insufficient evidence or missing required parameters)
-    └── ABSTAIN  ── (Contradiction >= 0.90, invalid telemetry, or unsupported advice)
-            │
-            ▼
-[response_generator.py] ── Stored Expert Advice + Grounded Numerical Telemetry
-            │
-            ▼
-[Multimodal Output] ───── Gradio Dashboard / edge-tts Audio Output (English & Telugu)
+```text
+                              [Farmer Input: Telugu / English Audio or Text]
+                                                    │
+                                                    ▼
+                                    [Whisper.cpp / Anaphora Resolver]
+                                                    │
+                                                    ▼
+                                      [Intent & Telemetry Extractor]
+                                        (spaCy Dependency Parsing)
+                                                    │
+                      ┌─────────────────────────────┴─────────────────────────────┐
+                      ▼                                                           ▼
+            [Fast-Path Safety Gates]                                     [Slow-Path Diagnostic]
+     - Tier 1: Biological Impossibility                                             │
+     - Tier 2: Chemical Incompatibility (e.g., Bleach+KMnO4)                        ▼
+     - Tier 3: Out-of-Domain / Temporal Bounds                         [ChromaDB Vector Retrieval]
+     - Tier 4: Acute Hypoxia Short-Circuit (<50ms)                      (Species & Limnology Facets)
+                      │                                                           │
+                      │                                                           ▼
+                      │                                            [DeBERTa-v3 NLI Verification]
+                      │                                            (Declarative Hypothesis Test)
+                      │                                                           │
+                      │                                                           ▼
+                      │                                            [Qwen 2.5 1.5B GGUF Synthesis]
+                      │                                              (Strict Context Grounding)
+                      │                                                           │
+                      └─────────────────────────────┬─────────────────────────────┘
+                                                    ▼
+                                      [NLLB-200 Vernacular Engine]
+                                   (Greedy Real-Time Telugu Synthesis)
+                                                    │
+                                                    ▼
+                                      [Dual-Language Clinical Output]
 ```
 
----
+### Key Pillars
 
-## ✨ Key Features
+1. **Deterministic Fast-Path (< 50ms):**
+   - **Emergency Hypoxia Gate:** Immediately detects lethal dissolved oxygen levels ($< 3.0\text{ mg/L}$) and triggers immediate aeration and feed-stoppage alarms without invoking LLMs.
+   - **State Persistence with Fresh Tracking:** Distinguishes between fresh, acute telemetry readings and historical conversational context, preventing redundant alarm loops during follow-up queries.
+   - **Chemical Safety Intercept:** Prevents hazardous mixing of oxidizing and reducing chemicals (e.g., calcium hypochlorite with potassium permanganate or formalin).
 
-- **Local-First & Edge-Optimized**: Engineered to operate on a 4-core CPU with $\le 8\text{ GB}$ RAM, targeting a peak resident memory of $\le 2.5\text{ GB}$ and an end-to-end response time of $\le 7.0\text{ s}$. Supports Apple Silicon MPS, NVIDIA CUDA FP16, and multi-threaded CPU AVX2/NEON execution.
-- **Deterministic Parameter & Intent Extraction**: `intent_extractor.py` handles species, symptoms, water-quality measurements, and conversational slot-filling without stochastic runtime LLMs. Includes an ultra-insensitive regular-expression schema built for field-facing human-machine interface (HMI) fault tolerance (e.g., handling variations like `D.0`, `d.o`, and irregular spacing).
-- **Multi-Layered Safety Guardrails**:
-  - **Biological Invariant Checks**: Intercepts impossible physical values (e.g., $\text{pH} < 4.0$ or $> 11.0$, $\text{DO} > 20.0\text{ mg/L}$) prior to vector-space search.
-  - **Emergency Telemetry Bypass**: A parsed $\text{DO} < 3.0\text{ ppm}$ immediately triggers an emergency alert, bypassing neural retrieval and inference entirely.
-  - **Contradiction Detection**: Halts normal diagnostic processing if conflicting telemetry is supplied (e.g., $\text{DO} = 2.5\text{ mg/L}$ and $8.0\text{ mg/L}$).
-- **NLI Hypothesis Verification**: Does not treat vector similarity as diagnostic proof. A domain-adapted DeBERTa-v3-small Cross-Encoder verifies whether retrieved evidence entails ($\ge 0.75$) or contradicts ($\ge 0.90$) the diagnostic hypothesis.
-- **Zero-Drift Response Construction**: `response_generator.py` binds pre-verified expert advice (curated from 23 aquaculture and veterinary reference manuals) with deterministic boilerplate and explicitly grounded numerical telemetry.
-- **Bilingual & Multimodal Support**: Accommodates voice input (Whisper), English and Telugu text output (with offline NLLB-200 translation), and cached text-to-speech (edge-tts with LRU caching).
+2. **Grounded Slow-Path (ChromaDB + DeBERTa NLI):**
+   - **Metadata & Topic Isolation:** Partitions candidate search space by target organism (`fish` vs. `shrimp`) and limnological domain, preventing cross-contamination between water-quality issues and parasitic chemotherapeutics.
+   - **Directional NLI Gate:** Uses a fine-tuned DeBERTa Cross-Encoder to evaluate premise-hypothesis entailment against declarative propositions, eliminating question bias and abstaining if evidence is missing.
 
----
-
-## 📊 Technical Stack & Subsystem Roles
-
-| Component | Model / Configuration | Role in AquaAssist |
-|---|---|---|
-| **Semantic Embeddings** | `BAAI/bge-m3` (1024-dim) | Encodes normalized queries and knowledge base chunks |
-| **Vector Database** | `ChromaDB 1.5.9` | Local vector storage (4,384 indexed documents) |
-| **NLI Verification Gate** | `DeBERTa-v3-small` Cross-Encoder | Conditional Entailment / Neutral / Contradiction classification |
-| **Query Extraction** | Python regex + token/entity heuristics | Deterministic intent, parameter extraction, and slot filling |
-| **Response Construction** | `response_generator.py` | Selects stored advice and injects grounded numerical values |
-| **Knowledge-Base Prep** | `Qwen-2.5-1.5B` (llama.cpp, GGUF + GBNF) | Offline structured extraction/synthesis (not used at runtime) |
-| **Translation** | `NLLB-200` | Offline English-to-Telugu translation during corpus preparation |
-| **Voice Transcription** | `Whisper` / `faster-whisper` | 16 kHz mono local speech-to-text |
-| **User Interface** | `Gradio` | Field-facing interactive dashboard |
+3. **Constrained SLM Inference & Translation:**
+   - **Local Inference:** Runs a quantized `Qwen-2.5-1.5B-Instruct` model locally via `llama.cpp` with strict GBNF grammar constraints.
+   - **Vernacular Pipeline:** Real-time Telugu translation via `facebook/nllb-200-distilled-600M` using greedy decoding and domain-specific lexicon enforcement.
 
 ---
 
-## 📈 Evaluation & Benchmark Summary
+## Directory Structure
 
-Experimental evaluation across targeted engineering scenarios (T1–T6) and a 20-case guardrail validation matrix demonstrates:
+AquaAssist/
+├── app.py                      # Gradio multi-turn UI & orchestration pipeline
+├── constraints.gbnf            # Strict GBNF grammar rules for SLM generation
+├── requirements.txt            # Production dependencies
+├── verify_architecture.py      # Automated pipeline test matrix runner
+├── src/
+│   ├── diagnostic_engine.py    # ChromaDB retrieval, NLI scoring, & telemetry health
+│   ├── intent_extractor.py     # Syntactic dependency parsing & state tracking
+│   ├── response_generator.py   # Token-budgeted Qwen SLM synthesis & NLLB translation
+│   ├── decision_router.py      # Policy safety gates (chemical, temporal, out-of-domain)
+│   ├── decision_response.py    # Deterministic bilingual policy responses
+│   ├── whisper_transcriber.py  # Local Telugu/English speech transcription
+│   └── sync_manager.py         # Remote release asset synchronization (OTA DB updates)
+├── data/
+│   └── chroma_db/              # Indexed vector database (1,971 semantic chunks)
+└── models/                     # GGUF models & DeBERTa router checkpoints
 
-- **Retrieval Accuracy**: 80% direct relevance (4 of 5 top-ranked candidates) on surface emergence queries; 93.3% (14 of 15) manual evidence queries fully supported by the corpus.
-- **Guardrail Conformance**: **20/20 (100%)** expected deterministic outcomes verified across critical low-DO, impossible telemetry, and out-of-domain input categories.
-- **Conversational Slot Inheritance**: Successfully inherited standalone numerical follow-up values (e.g., inheriting `"2.0"` into a pending `DO` slot) and preserved temporal context isolation.
-- **Component Latency**:
-  - `BGE-M3` cold-start loading: $\approx 32.12\text{ s}$ (one-time initialization overhead)
-  - Mean embedding time: $0.426\text{ s}$
-  - Mean ChromaDB retrieval time: $0.014\text{ s}$
-  - Total retrieval pipeline latency: $\mathbf{0.440\text{ s}}$
-
----
-
-## 🚀 Getting Started
-
-### Prerequisites
-- Python 3.10+
-- Minimum hardware: 4-Core CPU, 8 GB RAM (Supports Apple Silicon MPS & x86-64 AVX2)
-- Docker (optional, recommended for reproducible deployment)
-
-### Local Installation
-
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/your-org/AquaAssist.git
-   cd AquaAssist
-   ```
-
-2. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Initialize Knowledge Base & Vector Store:**
-   Sync and populate the local ChromaDB database:
-   ```bash
-   python sync_manager.py --init
-   ```
-
-4. **Run the Gradio Interface:**
-   ```bash
-   python app.py   # serves on http://localhost:7860
-   ```
 
 ---
 
-## 🐳 Docker Deployment
+## Getting Started
 
-AquaAssist can be run in a containerized environment, keeping database state decoupled from the container image for seamless over-the-air (OTA) atomic updates:
+### 1. Prerequisites
+
+- Python 3.10+ (macOS Apple Silicon MPS, Linux CUDA, or CPU)
+- `ffmpeg` (for audio transcription pipeline)
 
 ```bash
-# Build the Docker image
-docker build -t aqua-assist:latest .
+# macOS
+brew install ffmpeg
 
-# Run the container (the knowledge base is fetched via OTA from the GitHub release on first boot)
-docker run -p 7860:7860 aqua-assist:latest
+# Ubuntu / Debian
+sudo apt update && sudo apt install -y ffmpeg
+```
+### 2. Installation
+Clone the repository and install dependencies:
+```bash
+git clone https://github.com/Khushhiii08/AquaAssist.git
+cd AquaAssist
+
+python -m venv venv
+source venv/bin/activate
+
+pip install -r requirements.txt
+python -m spacy download en_core_web_sm
+
 ```
 
----
+### 3. Knowledge Base & Models Setup
+AquaAssist runs off verified ICAR-CIBA aquaculture manuals. When running app.py for the first time, sync_manager.py downloads the pre-indexed chroma_db.zip release bundle automatically if local vectors are not present.
 
-## 🔬 Known Limitations & Future Work
+To manually ingest raw documentation:
+```bash
+python src/ingest.py
 
-As analyzed in the technical evaluation:
-- **Canonical Slot Normalization**: Addressing parameter mapping mismatches (e.g., standardizing `"dissolved oxygen"` directly to canonical `DO` to prevent state stalls).
-- **Vernacular Speech Recognition**: Improving acoustic speech-to-text accuracy for diverse regional Telugu dialects.
-- **Diagnostic Subject Persistence**: Enhancing multi-turn subject tracking to maintain specific species context (e.g., shrimp vs. pond water) across multi-turn follow-ups.
+```
 
----
+### 4. Run Locally
+Launch the Gradio interface on http://localhost:7860:
+```bash
+python app.py
+
+```
