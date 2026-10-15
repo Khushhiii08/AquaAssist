@@ -10,6 +10,7 @@ import zipfile
 import urllib.request
 import ssl
 import shutil
+import time
 from typing import Tuple, Optional
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -29,7 +30,6 @@ def get_active_db_path() -> str:
                     return os.path.join(DATA_DIR, active_dir)
         except Exception:
             pass
-    # Default initial path
     return os.path.join(DATA_DIR, "chroma_db")
 
 
@@ -39,10 +39,8 @@ def set_active_db_path(version_dir_name: str) -> None:
     temp_pointer = POINTER_FILE + ".tmp"
     with open(temp_pointer, "w") as f:
         json.dump({"active_dir": version_dir_name}, f)
-    # Atomic rename of pointer file
-    if os.path.exists(POINTER_FILE):
-        os.remove(POINTER_FILE)
-    os.rename(temp_pointer, POINTER_FILE)
+    # os.replace is atomic across POSIX and modern Windows systems
+    os.replace(temp_pointer, POINTER_FILE)
 
 
 def download_and_apply_ota_update(url: str, target_dir: Optional[str] = None, max_retries: int = 3) -> Tuple[bool, str]:
@@ -50,34 +48,55 @@ def download_and_apply_ota_update(url: str, target_dir: Optional[str] = None, ma
     If target_dir is specified (e.g. models/deberta_aquaculture_router), extracts directly there.
     If target_dir is None, treats it as a ChromaDB update and applies blue/green pointer rotation.
     """
-    import time
-    
+    # Ensure data directory exists unconditionally
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+
     # CASE 1: Model Binary Updates (DeBERTa Router)
     if target_dir:
         os.makedirs(target_dir, exist_ok=True)
-        temp_zip = "temp_model_ota.zip"
+        temp_zip = os.path.join(DATA_DIR, "temp_model_ota.zip")
         try:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            req = urllib.request.Request(url, headers={'User-Agent': 'AquaAssist-OTA'})
-            with urllib.request.urlopen(req, context=ctx, timeout=300) as response:
-                if response.status != 200:
-                    return False, f"HTTP {response.status}"
+            req = urllib.request.Request(url, headers=headers)
+            print(f"[*] Downloading model archive from {url}...")
+            with urllib.request.urlopen(req, context=ctx, timeout=600) as response:
                 with open(temp_zip, "wb") as f:
                     while True:
                         chunk = response.read(1024 * 1024)
-                        if not chunk: break
+                        if not chunk:
+                            break
                         f.write(chunk)
-            
+
+            if not zipfile.is_zipfile(temp_zip):
+                return False, "Downloaded model archive is corrupted or invalid."
+
             with zipfile.ZipFile(temp_zip, 'r') as z:
                 z.extractall(target_dir)
+
+            # Handle single top-level directory nesting if zipped as folder
+            subdirs = [d for d in os.listdir(target_dir) if os.path.isdir(os.path.join(target_dir, d))]
+            if len(subdirs) == 1 and subdirs[0] == os.path.basename(target_dir):
+                nested_dir = os.path.join(target_dir, subdirs[0])
+                for item in os.listdir(nested_dir):
+                    shutil.move(os.path.join(nested_dir, item), target_dir)
+                os.rmdir(nested_dir)
+
             return True, f"Model extracted to {target_dir} successfully."
         except Exception as e:
             return False, f"Model OTA Error: {e}"
         finally:
             if os.path.exists(temp_zip):
-                os.remove(temp_zip)
+                try:
+                    os.remove(temp_zip)
+                except OSError:
+                    pass
 
     # CASE 2: ChromaDB Vector Knowledge Base Updates (Blue/Green Switch)
     timestamp = int(time.time())
@@ -86,16 +105,10 @@ def download_and_apply_ota_update(url: str, target_dir: Optional[str] = None, ma
     temp_zip = os.path.join(DATA_DIR, "temp_ota_update.zip")
 
     try:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-
-        req = urllib.request.Request(url, headers={'User-Agent': 'AquaAssist-OTA'})
+        req = urllib.request.Request(url, headers=headers)
         print(f"[*] Downloading knowledge base update to {new_version_name}...")
 
-        with urllib.request.urlopen(req, context=ctx, timeout=300) as response:
-            if response.status != 200:
-                return False, f"HTTP error {response.status}"
+        with urllib.request.urlopen(req, context=ctx, timeout=600) as response:
             with open(temp_zip, "wb") as f:
                 while True:
                     chunk = response.read(1024 * 1024)
@@ -104,7 +117,7 @@ def download_and_apply_ota_update(url: str, target_dir: Optional[str] = None, ma
                     f.write(chunk)
 
         if not zipfile.is_zipfile(temp_zip):
-            return False, "Downloaded archive is corrupted."
+            return False, "Downloaded archive is corrupted or not a valid zip."
 
         # Extract to new version directory
         os.makedirs(new_target_dir, exist_ok=True)
@@ -125,7 +138,7 @@ def download_and_apply_ota_update(url: str, target_dir: Optional[str] = None, ma
             if "chroma.sqlite3" in files:
                 has_sqlite = True
                 break
-        
+
         if not has_sqlite:
             shutil.rmtree(new_target_dir, ignore_errors=True)
             return False, "Database verification failed: chroma.sqlite3 missing."
