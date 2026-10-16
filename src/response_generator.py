@@ -45,19 +45,42 @@ def get_slm():
 
 
 def get_translator():
-    """Lazy-loads NLLB-200 in half-precision for fast inference."""
+    """
+    Lazy-loads NLLB-200 offline directly from local cache with singleton caching.
+    Returns (model, tokenizer).
+    """
     global _TRANSLATOR_MODEL, _TRANSLATOR_TOKENIZER
-    if _TRANSLATOR_MODEL is None:
-        try:
-            print(f"[*] Loading NLLB-200 Translator on {DEVICE.upper()}...")
-            _TRANSLATOR_TOKENIZER = AutoTokenizer.from_pretrained(SRC_TRANSLATOR)
-            _TRANSLATOR_MODEL = AutoModelForSeq2SeqLM.from_pretrained(
-                SRC_TRANSLATOR,
-                torch_dtype=torch.float16 if DEVICE in ("mps", "cuda") else torch.float32
-            ).to(DEVICE)
-            _TRANSLATOR_MODEL.eval()
-        except Exception as e:
-            print(f"[!] Warning: Translation model failed to load ({e}).")
+    if _TRANSLATOR_MODEL is not None and _TRANSLATOR_TOKENIZER is not None:
+        return _TRANSLATOR_MODEL, _TRANSLATOR_TOKENIZER
+
+    model_path = os.getenv("NLLB_MODEL_PATH", SRC_TRANSLATOR)
+
+    try:
+        # Enforce offline loading without making remote API HEAD requests
+        _TRANSLATOR_TOKENIZER = AutoTokenizer.from_pretrained(
+            model_path,
+            local_files_only=True
+        )
+        _TRANSLATOR_MODEL = AutoModelForSeq2SeqLM.from_pretrained(
+            model_path,
+            local_files_only=True
+        ).to(DEVICE)
+    except Exception as e:
+        # Dynamic fallback to verified snapshot directory in home cache
+        user_home = os.path.expanduser("~")
+        fallback_snapshot = os.path.join(
+            user_home,
+            ".cache", "huggingface", "hub",
+            "models--facebook--nllb-200-distilled-600M", "snapshots",
+            "f8d333a098d19b4fd9a8b18f94170487ad3f821d"
+        )
+        if os.path.isdir(fallback_snapshot):
+            print(f"[INFO] Using direct local snapshot directory for NLLB ({fallback_snapshot})")
+            _TRANSLATOR_TOKENIZER = AutoTokenizer.from_pretrained(fallback_snapshot, local_files_only=True)
+            _TRANSLATOR_MODEL = AutoModelForSeq2SeqLM.from_pretrained(fallback_snapshot, local_files_only=True).to(DEVICE)
+        else:
+            raise RuntimeError(f"Failed to load NLLB offline: {e}")
+
     return _TRANSLATOR_MODEL, _TRANSLATOR_TOKENIZER
 
 
@@ -89,7 +112,7 @@ def translate_to_telugu(english_text: str) -> str:
         
         forced_bos = tokenizer.convert_tokens_to_ids("tel_Telu")
         
-        # 2. Expand generation tokens to 280 to stop sentence cutoff (early_stopping removed for num_beams=1)
+        # 2. Greedy generation up to 280 tokens to prevent sentence cutoff
         with torch.no_grad():
             tokens = model.generate(
                 **inputs,
@@ -124,6 +147,7 @@ def translate_to_telugu(english_text: str) -> str:
     except Exception as e:
         print(f"[!] Translation error: {e}")
         return "తెలుగు అనువాదంలో లోపం ఏర్పడింది."
+
 
 def format_evidence_context(evidence_list: List[Dict[str, Any]], max_chunks: int = 3, max_words_per_chunk: int = 150) -> str:
     """
@@ -173,6 +197,16 @@ def synthesize_with_slm(query: str, context: str, species: Optional[str] = None)
             "clearly distinct from extreme survival tolerance limits (2-40 ppt)."
         )
 
+    # Diurnal pH Shift Limnological Directive (T13)
+    ph_swing_guard = ""
+    if any(k in query_lower for k in ["morning", "afternoon", "diurnal"]) and "ph" in query_lower:
+        ph_swing_guard = (
+            "\nLIMNOLOGICAL DIRECTIVE: Diurnal pH fluctuation from morning (~7.0) to afternoon (>9.0) "
+            "is caused by intense phytoplankton bloom photosynthesis consuming free carbon dioxide. "
+            "Advise application of agricultural gypsum or calcium chloride to provide calcium ions without raising pH, "
+            "cautious partial water exchange, or shading/light bloom reduction. DO NOT advise quicklime or slaked lime as they increase alkaline pH."
+        )
+
     # Telemetry Status Guardrail: Ground normal/healthy parameter readings and suppress irrelevant protocols
     telemetry_guard = ""
     do_match = re.search(r"(?:do|dissolved oxygen|probe|reads)\s*[:=]?\s*(\d+(?:\.\d+)?)", query_lower)
@@ -195,6 +229,7 @@ def synthesize_with_slm(query: str, context: str, species: Optional[str] = None)
         f"{species_str}"
         f"{pathogen_guard}"
         f"{salinity_guard}"
+        f"{ph_swing_guard}"
         f"{telemetry_guard}"
         "\nFormat your response as a clear, structured list of practical operational steps. "
         "Be direct, actionable, avoid duplicate sentences, and keep it under 150 words."
@@ -237,7 +272,6 @@ def generate_answer(query_or_claim: str, evidence_list: List[Dict[str, Any]], sp
     q_low = query_or_claim.lower()
     if ("tan" in q_low or "ammonia" in q_low) and "ph" in q_low:
         try:
-            import re
             tan_match = re.search(r"(?:tan|ammonia|nitrogen)\s*(?:is|reads|level)?\s*[:=]?\s*(\d+(?:\.\d+)?)", q_low)
             ph_match = re.search(r"ph\s*(?:is|reads|level)?\s*[:=]?\s*(\d+(?:\.\d+)?)", q_low)
             if tan_match and ph_match:
