@@ -64,31 +64,63 @@ def evaluate_telemetry_health_and_conflicts(
     if not telemetry:
         return False, None, None
 
-    # Check for diurnal temporal cues (T13: morning vs afternoon pH fluctuation)
-    raw_query = session_state.get("raw_query", "").lower()
-    is_diurnal = any(w in raw_query for w in ["morning", "afternoon", "evening", "diurnal", "day and night", "night"])
+    # Retrieve query context safely across possible state key variations
+    query_text = (
+        session_state.get("query")
+        or session_state.get("raw_query")
+        or session_state.get("normalized_query")
+        or ""
+    ).lower()
 
     # 1. Multi-Reading Conflict Detection
     for param, records in telemetry.items():
         if isinstance(records, list) and len(records) > 1:
-            values = [r["value"] for r in records if isinstance(r, dict) and r.get("value") is not None]
-            if len(values) > 1:
-                spread = max(values) - min(values)
-                if param == "DO" and spread >= 2.0:
+            all_values: List[float] = []
+            distinct_epochs: Set[str] = set()
+
+            for r in records:
+                if isinstance(r, dict) and r.get("value") is not None:
+                    try:
+                        all_values.append(float(r["value"]))
+                    except (ValueError, TypeError):
+                        continue
+                    temporal = r.get("temporal")
+                    if temporal and str(temporal).strip().lower() not in ("none", "unspecified", "current"):
+                        distinct_epochs.add(str(temporal).strip().lower())
+
+            if len(all_values) < 2:
+                continue
+
+            spread = max(all_values) - min(all_values)
+
+            # --- DISSOLVED OXYGEN (DO) CONFLICT CHECK (T11) ---
+            # DO variance >= 2.0 within a single turn indicates diverging instruments (probe vs kit)
+            if param == "DO" and spread >= 2.0:
+                return (
+                    True,
+                    "CONFLICT_READINGS",
+                    f"Contradictory Dissolved Oxygen readings reported: {all_values} mg/L. Re-calibration required.",
+                )
+
+            # --- pH CONFLICT & LIMNOLOGICAL DIURNAL CHECK (T13) ---
+            # Pond limnology naturally causes pH to swing from morning (7.0) to peak afternoon (9.0+)
+            # due to photosynthetic carbon dioxide uptake.
+            if param == "pH":
+                is_diurnal_cycle = (
+                    len(distinct_epochs) >= 2
+                    or any(e in distinct_epochs for e in ["morning", "afternoon", "evening", "night", "dusk", "dawn", "noon", "am", "pm"])
+                    or any(w in query_text for w in ["morning", "afternoon", "evening", "night", "diurnal", "day", "rises", "drops", "swing", "fluctuation"])
+                )
+
+                # Only flag CONFLICT if spread >= 1.5 AND there is strictly NO diurnal / temporal context
+                if spread >= 1.5 and not is_diurnal_cycle:
                     return (
                         True,
                         "CONFLICT_READINGS",
-                        f"Contradictory Dissolved Oxygen readings reported: {values} mg/L. Re-calibration required.",
-                    )
-                # If diurnal shifts are described, delta of 2.3 is biologically natural, not a sensor defect
-                if param == "pH" and spread >= 1.5 and not is_diurnal:
-                    return (
-                        True,
-                        "CONFLICT_READINGS",
-                        f"Contradictory pH readings reported: {values}. Re-calibration required.",
+                        f"Contradictory pH readings reported without temporal context: {all_values}. Re-calibration required.",
                     )
 
-    # 2. Biological Boundary Verification
+    # 2. Biological Boundary Verification (T14)
     for param, records in telemetry.items():
         items = records if isinstance(records, list) else [records]
         for item in items:
@@ -97,16 +129,21 @@ def evaluate_telemetry_health_and_conflicts(
             val = item.get("value")
             if val is None:
                 continue
+            try:
+                num_val = float(val)
+            except (ValueError, TypeError):
+                continue
+
             if param in BIOLOGICAL_LIMITS:
                 low, high = BIOLOGICAL_LIMITS[param]
-                if val < low or val > high:
+                if num_val < low or num_val > high:
                     return (
                         True,
                         "SENSOR_CONFLICT",
-                        f"Impossible {param} reading: {val} (Expected physical range: {low}-{high})",
+                        f"Impossible {param} reading: {num_val} (Expected physical range: {low}-{high})",
                     )
 
-    # 3. Acute Hypoxia Emergency Check (DO < 3.0 mg/L)
+    # 3. Acute Hypoxia Emergency Check (DO < 3.0 mg/L) (T4 & T19)
     # INVARIANT: Only fire emergency reflex if telemetry is FRESH in this turn (Phi == True)
     is_fresh = session_state.get("fresh_telemetry_in_turn", True)
 
@@ -114,11 +151,14 @@ def evaluate_telemetry_health_and_conflicts(
     if not isinstance(do_records, list):
         do_records = [do_records]
 
-    valid_do = [
-        r["value"]
-        for r in do_records
-        if isinstance(r, dict) and r.get("value") is not None
-    ]
+    valid_do: List[float] = []
+    for r in do_records:
+        if isinstance(r, dict) and r.get("value") is not None:
+            try:
+                valid_do.append(float(r["value"]))
+            except (ValueError, TypeError):
+                continue
+
     if is_fresh and valid_do and min(valid_do) < 3.0:
         species = session_state.get("species") or "pond stock"
         lowest = min(valid_do)

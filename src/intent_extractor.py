@@ -236,7 +236,7 @@ def extract_telemetry(doc: spacy.tokens.Doc, pending_metrics: Optional[List[str]
             if param_key:
                 if not unit:
                     unit = DEFAULT_UNITS.get(param_key, "")
-                temporal = extract_temporal_aspect(token)
+                temporal = extract_temporal_aspect(token) or "current"
                 telemetry.append({
                     "parameter": param_key,
                     "value": val,
@@ -371,6 +371,11 @@ def extract_hypothesis(farmer_query: str, session_state: Optional[Dict[str, Any]
     if "symptoms" not in session_state:
         session_state["symptoms"] = []
 
+    # Store query under all common context keys
+    session_state["query"] = farmer_query
+    session_state["raw_query"] = farmer_query
+    session_state["last_query"] = cleaned_query
+
     doc = nlp(cleaned_query)
 
     # 1. Species & Habitat Isolation
@@ -380,7 +385,7 @@ def extract_hypothesis(farmer_query: str, session_state: Optional[Dict[str, Any]
     if habitat:
         session_state["habitat"] = habitat
 
-    # 2. Telemetry Extraction (Appends to lists to support T11 conflict detection)
+    # 2. Telemetry Extraction
     pending = session_state.get("pending_metrics")
     extracted_telemetry = extract_telemetry(doc, pending_metrics=pending)
     
@@ -392,11 +397,15 @@ def extract_hypothesis(farmer_query: str, session_state: Optional[Dict[str, Any]
         if "telemetry" not in session_state or not isinstance(session_state["telemetry"], dict):
             session_state["telemetry"] = {}
 
-        # Group metrics extracted strictly within THIS turn
+        # Group metrics extracted strictly within THIS turn, PRESERVING temporal aspect
         current_turn_metrics = {}
         for item in extracted_telemetry:
             p_name = item["parameter"]
-            record = {"value": item["value"], "unit": item["unit"]}
+            record = {
+                "value": item["value"],
+                "unit": item["unit"],
+                "temporal": item.get("temporal")  # <-- Preserved for diurnal/conflict invariants
+            }
             if p_name not in current_turn_metrics:
                 current_turn_metrics[p_name] = []
             current_turn_metrics[p_name].append(record)
@@ -411,7 +420,6 @@ def extract_hypothesis(farmer_query: str, session_state: Optional[Dict[str, Any]
         session_state["symptoms"] = set(symptoms)
 
     is_info = is_informational_query(doc)
-    session_state["last_query"] = cleaned_query
 
     # --- RETRIEVAL QUERY FORMULATION ---
     # Informational Questions (T1, T2, T3, T5)
@@ -435,7 +443,14 @@ def extract_hypothesis(farmer_query: str, session_state: Optional[Dict[str, Any]
     valid_do = [r["value"] for r in do_records if isinstance(r, dict) and r.get("value") is not None]
     is_healthy_do = bool(valid_do and min(valid_do) >= 5.0)
 
-    if has_explicit_symptoms:
+    # Check for diurnal pH dynamics (T13)
+    ph_records = session_state.get("telemetry", {}).get("pH", [])
+    valid_ph = [r["value"] for r in ph_records if isinstance(r, dict) and r.get("value") is not None]
+    is_diurnal_ph = len(valid_ph) >= 2 and (max(valid_ph) - min(valid_ph)) >= 1.5
+
+    if is_diurnal_ph:
+        status_phrase = "diurnal pH fluctuation and afternoon phytoplankton carbon dioxide depletion"
+    elif has_explicit_symptoms:
         symptom_str = ", ".join(session_state["symptoms"])
         status_phrase = f"showing {symptom_str}"
     elif is_healthy_do:
@@ -447,7 +462,8 @@ def extract_hypothesis(farmer_query: str, session_state: Optional[Dict[str, Any]
     for param_name, records in session_state.get("telemetry", {}).items():
         if isinstance(records, list):
             for r in records:
-                telemetry_parts.append(f"{param_name} {r['value']} {r['unit']}".strip())
+                temp_label = f" ({r['temporal']})" if r.get("temporal") else ""
+                telemetry_parts.append(f"{param_name}{temp_label} {r['value']} {r['unit']}".strip())
         elif isinstance(records, dict):
             telemetry_parts.append(f"{param_name} {records['value']} {records['unit']}".strip())
         
