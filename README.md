@@ -11,10 +11,6 @@ pinned: false
 
 # AquaAssist: Neuro-Symbolic Edge Aquaculture Diagnostic System
 
-[![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-blue)](https://huggingface.co/spaces)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
 **AquaAssist** is an offline-first, vernacular neuro-symbolic clinical diagnostic and water-quality decision engine for aquaculture pond managers (finfish and brackishwater shrimp). It couples deterministic symbolic guardrails (safety gates, telemetry bounds, syntactic dependency trees, and directional NLI verification) with neural language and speech processing (Qwen 2.5 SLM, Whisper.cpp, and NLLB-200).
 
 ---
