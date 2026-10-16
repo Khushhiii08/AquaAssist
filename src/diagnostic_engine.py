@@ -286,7 +286,21 @@ def convert_query_to_declarative_hypothesis(query: str, session_state: Optional[
     if any(drug in q_low for drug in ["paracetamol", "tablet", "aspirin", "crocin", "ibuprofen"]):
         return f"Paracetamol tablets are an approved and scientific clinical treatment for fungal infections in {species} aquaculture."
 
-    # 1. Elliptical or action-seeking questions
+    # 1. Diurnal pH Shift Limnology (T13: Morning vs. Afternoon Dynamic)
+    ph_records = telemetry.get("pH", [])
+    if isinstance(ph_records, list) and len(ph_records) >= 2:
+        ph_vals = [r["value"] for r in ph_records if isinstance(r, dict) and r.get("value") is not None]
+        if len(ph_vals) >= 2:
+            delta = max(ph_vals) - min(ph_vals)
+            temporals = {r.get("temporal") for r in ph_records if isinstance(r, dict) and r.get("temporal")}
+            is_diurnal = ("morning" in temporals and "afternoon" in temporals) or delta >= 1.5 or any(w in q_low for w in ["morning", "afternoon", "diurnal"])
+            if is_diurnal:
+                return (
+                    f"Diurnal pH swings between morning {min(ph_vals)} and afternoon {max(ph_vals)} in {species} culture ponds "
+                    f"are caused by heavy phytoplankton blooms consuming dissolved carbon dioxide during peak photosynthesis."
+                )
+
+    # 2. Elliptical or action-seeking questions
     action_triggers = ["what should i do", "how to treat", "what now", "do about that", "remedy", "corrective action"]
     if any(trig in q_low for trig in action_triggers) or len(q_clean.split()) <= 6:
         if "DO" in telemetry or any("surface" in s or "hypoxia" in s for s in symptoms):
@@ -297,22 +311,21 @@ def convert_query_to_declarative_hypothesis(query: str, session_state: Optional[
             return f"Lime and water treatments stabilize fluctuating pH levels in {species} aquaculture ponds."
         return f"Corrective aquaculture pond management and water quality restoration protect {species} health."
 
-    # 2. Status observations / pure telemetry reports without explicit interrogatives (T16)
+    # 3. Status observations / pure telemetry reports without explicit interrogatives (T16 & follow-ups)
     wh_words = ("what", "how", "why", "when", "which", "is", "can", "should")
     first_word = q_low.split()[0] if q_low else ""
     is_wh = first_word in wh_words or q.endswith("?")
 
-    # Pure telemetry reports / status confirmations (T16 & follow-up confirmations)
     has_telemetry_report = any(p in q_low for p in ["temperature", "salinity", "ppt", "celsius", "ph", "do", "probe", "reads"]) and any(c.isdigit() for c in q_low)
     if has_telemetry_report and not is_wh:
-        # Check if DO reading is optimal
+        # Optimal DO reading confirmation
         if "DO" in telemetry:
             do_vals = [r.get("value") for r in telemetry["DO"] if isinstance(r, dict) and r.get("value") is not None]
             if do_vals and min(do_vals) >= 5.0:
                 return f"Dissolved oxygen levels above 5.0 mg/L provide optimal respiratory conditions for {species} health and growth."
         return f"Water temperature, salinity, and water quality parameters are maintained within safe ranges for {species} nursery rearing."
     
-    # 3. Informational Wh- inquiries (T1 & T18 specific handling)
+    # 4. Informational Wh- inquiries (T1 & T18 specific handling)
     if is_wh:
         # T1: Dissolved oxygen limnological causes
         if any(w in q_low for w in ["cause", "causes", "why"]) and any(w in q_low for w in ["oxygen", "do", "hypoxia"]):

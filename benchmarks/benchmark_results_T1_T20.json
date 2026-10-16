@@ -10,11 +10,11 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 5.332458997145295,
-        "fast_path_ms": 10.218668001471087,
-        "diagnostic_s": 0.7000669999979436,
-        "generation_s": 19.368211791006615,
-        "total_slow_path_s": 20.06827879100456
+        "ingest_ms": 4.948374999003136,
+        "fast_path_ms": 9.344416999738314,
+        "diagnostic_s": 0.6238352079999459,
+        "generation_s": 18.21581066699946,
+        "total_slow_path_s": 18.839645874999405
       }
     },
     {
@@ -24,8 +24,8 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 5.456500002765097,
-        "fast_path_ms": 10.14858299458865
+        "ingest_ms": 5.07883399950515,
+        "fast_path_ms": 10.008876000938471
       }
     },
     {
@@ -35,8 +35,8 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 3.83504199271556,
-        "fast_path_ms": 7.433958991896361
+        "ingest_ms": 3.6199159985699225,
+        "fast_path_ms": 7.17070799873909
       }
     },
     {
@@ -46,8 +46,8 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 4.569124997942708,
-        "fast_path_ms": 8.508874991093762
+        "ingest_ms": 3.828667000561836,
+        "fast_path_ms": 8.00241700017068
       }
     },
     {
@@ -57,11 +57,11 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 3.313999986858107,
-        "fast_path_ms": 6.4193339785560966,
-        "diagnostic_s": 0.9390663749945816,
-        "generation_s": 6.1435035840113414,
-        "total_slow_path_s": 7.082569959005923
+        "ingest_ms": 2.7388329999666894,
+        "fast_path_ms": 5.394333000367624,
+        "diagnostic_s": 0.8954391249990294,
+        "generation_s": 5.305704582999169,
+        "total_slow_path_s": 6.201143707998199
       }
     },
     {
@@ -71,8 +71,8 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 4.249874997185543,
-        "fast_path_ms": 8.06916700094007
+        "ingest_ms": 4.090708998774062,
+        "fast_path_ms": 8.228458998928545
       }
     },
     {
@@ -82,11 +82,11 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 3.8255420076893643,
-        "fast_path_ms": 8.078416998614557,
-        "diagnostic_s": 0.5943514999962645,
-        "generation_s": 7.575892458000453,
-        "total_slow_path_s": 8.170243957996718
+        "ingest_ms": 3.809499999988475,
+        "fast_path_ms": 7.5468329996510874,
+        "diagnostic_s": 0.579441833000601,
+        "generation_s": 6.980018166999798,
+        "total_slow_path_s": 7.559460000000399
       }
     },
     {
@@ -96,8 +96,8 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 3.6302079970482737,
-        "fast_path_ms": 8.052249002503231
+        "ingest_ms": 3.4438330003467854,
+        "fast_path_ms": 6.728083000780316
       }
     },
     {
@@ -107,8 +107,8 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 3.394499988644384,
-        "fast_path_ms": 6.48704198829364
+        "ingest_ms": 3.4818340009223903,
+        "fast_path_ms": 6.634584000494215
       }
     },
     {
@@ -118,8 +118,8 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 2.281458000652492,
-        "fast_path_ms": 4.392208007629961
+        "ingest_ms": 2.9617090003739577,
+        "fast_path_ms": 5.286918001729646
       }
     },
     {
@@ -129,8 +129,8 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 3.7412499950733036,
-        "fast_path_ms": 7.45658298546914
+        "ingest_ms": 10.985375000018394,
+        "fast_path_ms": 20.999083000788232
       }
     },
     {
@@ -140,11 +140,11 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 4.142999998293817,
-        "fast_path_ms": 8.181832992704585,
-        "diagnostic_s": 0.5769975409930339,
-        "generation_s": 9.07001675000356,
-        "total_slow_path_s": 9.647014290996594
+        "ingest_ms": 7.569749999674968,
+        "fast_path_ms": 11.91099999959988,
+        "diagnostic_s": 0.5750782919985795,
+        "generation_s": 8.336012625000876,
+        "total_slow_path_s": 8.911090916999456
       }
     },
     {
@@ -154,11 +154,11 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 3.5188339970773086,
-        "fast_path_ms": 6.971958995563909,
-        "diagnostic_s": 0.2000647920067422,
-        "generation_s": 10.911794084007852,
-        "total_slow_path_s": 11.111858876014594
+        "ingest_ms": 3.507999999783351,
+        "fast_path_ms": 6.583582999155624,
+        "diagnostic_s": 0.2041054580004129,
+        "generation_s": 10.225675707999471,
+        "total_slow_path_s": 10.429781165999884
       }
     },
     {
@@ -168,8 +168,8 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 3.288417006842792,
-        "fast_path_ms": 6.076542005757801
+        "ingest_ms": 12.163999999756925,
+        "fast_path_ms": 18.750917000943446
       }
     },
     {
@@ -179,9 +179,9 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 3.9461659907829016,
-        "fast_path_ms": 7.876540985307656,
-        "diagnostic_s": 0.5806259999953909
+        "ingest_ms": 7.249874999615713,
+        "fast_path_ms": 13.78524999927322,
+        "diagnostic_s": 0.5596491670003161
       }
     },
     {
@@ -191,11 +191,11 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 3.5703750036191195,
-        "fast_path_ms": 6.9670410011895,
-        "diagnostic_s": 0.3193847920047119,
-        "generation_s": 11.984365750002326,
-        "total_slow_path_s": 12.303750542007037
+        "ingest_ms": 3.601999998863903,
+        "fast_path_ms": 6.807999998272862,
+        "diagnostic_s": 0.305372583999997,
+        "generation_s": 11.516307125000822,
+        "total_slow_path_s": 11.821679709000819
       }
     },
     {
@@ -205,11 +205,11 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 4.653249998227693,
-        "fast_path_ms": 9.377166992635466,
-        "diagnostic_s": 0.5873916249984177,
-        "generation_s": 12.137700042003416,
-        "total_slow_path_s": 12.725091667001834
+        "ingest_ms": 4.0544999992562225,
+        "fast_path_ms": 8.435249999820371,
+        "diagnostic_s": 0.5666422499998589,
+        "generation_s": 11.278686416999335,
+        "total_slow_path_s": 11.845328666999194
       }
     },
     {
@@ -219,11 +219,11 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 3.3266249956795946,
-        "fast_path_ms": 6.167375002405606,
-        "diagnostic_s": 0.5862697080010548,
-        "generation_s": 12.53258216600807,
-        "total_slow_path_s": 13.118851874009124
+        "ingest_ms": 3.155708000122104,
+        "fast_path_ms": 5.8315410005889134,
+        "diagnostic_s": 0.5742240420004237,
+        "generation_s": 11.840991458000644,
+        "total_slow_path_s": 12.415215500001068
       }
     },
     {
@@ -233,11 +233,11 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 2.6950000028591603,
-        "fast_path_ms": 4.949167006998323,
-        "diagnostic_s": 0.5845068329945207,
-        "generation_s": 12.356358582997927,
-        "total_slow_path_s": 12.940865415992448
+        "ingest_ms": 2.6214580011583166,
+        "fast_path_ms": 4.824417001145775,
+        "diagnostic_s": 0.5648877919993538,
+        "generation_s": 11.432568707999962,
+        "total_slow_path_s": 11.997456499999316
       }
     },
     {
@@ -247,11 +247,11 @@
       "status": "PASSED",
       "faults": [],
       "timing": {
-        "ingest_ms": 3.4572080039652064,
-        "fast_path_ms": 6.824249008786865,
-        "diagnostic_s": 0.5614020420034649,
-        "generation_s": 11.514722207997693,
-        "total_slow_path_s": 12.076124250001158
+        "ingest_ms": 3.4194580002804287,
+        "fast_path_ms": 6.602875000680797,
+        "diagnostic_s": 0.5473417919984058,
+        "generation_s": 11.24776487499912,
+        "total_slow_path_s": 11.795106666997526
       }
     }
   ]

@@ -7,6 +7,7 @@ Stores structured list-based telemetry in session_state for conflict and emergen
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any, Tuple
 import re
+from langsmith import unit
 import spacy
 
 try:
@@ -78,6 +79,195 @@ DEFAULT_UNITS = {
     "ORP": "mV"
 }
 
+TEMPORAL_MODIFIERS = {"morning", "dawn", "afternoon", "evening", "night", "dusk", "noon", "am", "pm"}
+
+def extract_temporal_aspect(token: spacy.tokens.Token) -> Optional[str]:
+    """Finds temporal words (morning, afternoon, etc.) near the measurement token."""
+    start = max(0, token.i - 6)
+    end = min(len(token.doc), token.i + 6)
+    for t in token.doc[start:end]:
+        t_clean = t.text.lower()
+        if t_clean in TEMPORAL_MODIFIERS:
+            return t_clean
+    return None
+
+def find_governing_parameter(num_token: spacy.tokens.Token) -> Optional[str]:
+    """
+    Syntactically navigates the dependency tree to find the governing parameter.
+    Handles:
+    1. Direct head attachment (e.g., 'pH 7.1')
+    2. Copular predicative structures (e.g., 'pH is 7.1')
+    3. Verb prepositional complements (e.g., 'pH rises to 9.4', 'DO drops to 1.8')
+    4. Unit-attribute structures (e.g., 'temperature is 31 C' -> num points to C, C points to is)
+    """
+    head = num_token.head
+    head_lemma = head.lemma_.lower().rstrip(":")
+    if head_lemma in PARAMETER_LEMMA_MAP:
+        return PARAMETER_LEMMA_MAP[head_lemma]
+
+    # Copular / Auxiliary constructions ('pH is 7.1')
+    if head.pos_ in ("AUX", "VERB"):
+        for child in head.children:
+            child_lemma = child.lemma_.lower().rstrip(":")
+            if child_lemma in PARAMETER_LEMMA_MAP:
+                return PARAMETER_LEMMA_MAP[child_lemma]
+            # Check compound subject (e.g., 'Water temperature is 31')
+            for subchild in child.children:
+                sub_lemma = subchild.lemma_.lower().rstrip(":")
+                if sub_lemma in PARAMETER_LEMMA_MAP:
+                    return PARAMETER_LEMMA_MAP[sub_lemma]
+
+    # Prepositional phrases attached to verbs ('rises to 9.4')
+    if head.dep_ == "prep" and head.head.pos_ in ("VERB", "AUX"):
+        verb = head.head
+        for child in verb.children:
+            if child.dep_ in ("nsubj", "nsubjpass", "dobj"):
+                child_lemma = child.lemma_.lower().rstrip(":")
+                if child_lemma in PARAMETER_LEMMA_MAP:
+                    return PARAMETER_LEMMA_MAP[child_lemma]
+
+    # Unit symbol / noun attribute link (e.g. '31 C', '28 ppt' where 31 points to C, C points to 'is')
+    if head.dep_ in ("attr", "pobj", "dobj") and head.head.pos_ in ("AUX", "VERB"):
+        parent_verb = head.head
+        for child in parent_verb.children:
+            if child.dep_ in ("nsubj", "nsubjpass"):
+                child_lemma = child.lemma_.lower().rstrip(":")
+                if child_lemma in PARAMETER_LEMMA_MAP:
+                    return PARAMETER_LEMMA_MAP[child_lemma]
+                for subchild in child.children:
+                    sub_lemma = subchild.lemma_.lower().rstrip(":")
+                    if sub_lemma in PARAMETER_LEMMA_MAP:
+                        return PARAMETER_LEMMA_MAP[sub_lemma]
+
+    # Ancestor traversal (up to 3 levels)
+    curr = head
+    depth = 0
+    while curr != curr.head and depth < 3:
+        curr_lemma = curr.lemma_.lower().rstrip(":")
+        if curr_lemma in PARAMETER_LEMMA_MAP:
+            return PARAMETER_LEMMA_MAP[curr_lemma]
+        for sibling in curr.children:
+            sib_lemma = sibling.lemma_.lower().rstrip(":")
+            if sib_lemma in PARAMETER_LEMMA_MAP:
+                return PARAMETER_LEMMA_MAP[sib_lemma]
+        curr = curr.head
+        depth += 1
+
+    return None
+
+def extract_telemetry(doc: spacy.tokens.Doc, pending_metrics: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    telemetry = []
+    claimed_tokens = set()
+    last_seen_param = None
+
+    for token in doc:
+        # Track active parameter keyword in sentence
+        token_lemma = token.lemma_.lower().rstrip(":")
+        token_text = token.text.lower().rstrip(":")
+        if token_lemma in PARAMETER_LEMMA_MAP:
+            last_seen_param = PARAMETER_LEMMA_MAP[token_lemma]
+        elif token_text in PARAMETER_LEMMA_MAP:
+            last_seen_param = PARAMETER_LEMMA_MAP[token_text]
+
+        if token.like_num or token.pos_ == "NUM":
+            cleaned = re.sub(r"[^\d.]", "", token.text)
+            if not cleaned:
+                continue
+            try:
+                val = float(cleaned)
+            except ValueError:
+                continue
+
+            # 1. Syntactic dependency lookup
+            param_key = find_governing_parameter(token)
+
+            # 2. Forward window unit deduction (Token-Safe)
+            next_token = doc[token.i + 1] if token.i + 1 < len(doc) else None
+            next_raw = next_token.text.lower() if next_token else ""
+            
+            window_slice = doc[token.i + 1 : min(len(doc), token.i + 5)]
+            forward_text = "".join(t.text.lower() for t in window_slice)
+
+            # Strict unit-to-parameter determination:
+            # If the unit is explicitly stated, the unit dictates the parameter!
+            inferred_param_from_unit = None
+            inferred_unit = ""
+            if forward_text.startswith(("mg/l", "ppm", "mg/lt")):
+                inferred_param_from_unit = "DO"
+                inferred_unit = "mg/L"
+            elif forward_text.startswith(("ppt", "psu")):
+                inferred_param_from_unit = "salinity"
+                inferred_unit = "ppt"
+            elif next_raw in ("c", "°c", "celsius") or forward_text.startswith(("°c", "celsius")):
+                inferred_param_from_unit = "temperature"
+                inferred_unit = "°C"
+
+            # If unit provides a clear parameter, prioritize it over vague inheritance
+            if inferred_param_from_unit:
+                param_key = inferred_param_from_unit
+                unit = inferred_unit
+            else:
+                unit = DEFAULT_UNITS.get(param_key, "") if param_key else ""
+
+            # 3. Proximity fallback: Scan ±5 tokens if still unknown
+            if not param_key:
+                for offset in (-1, -2, -3, -4, -5, 1, 2):
+                    idx = token.i + offset
+                    if 0 <= idx < len(doc):
+                        w = doc[idx].lemma_.lower().rstrip(":")
+                        if w in PARAMETER_LEMMA_MAP:
+                            param_key = PARAMETER_LEMMA_MAP[w]
+                            break
+                        raw_w = doc[idx].text.lower().rstrip(":")
+                        if raw_w in PARAMETER_LEMMA_MAP:
+                            param_key = PARAMETER_LEMMA_MAP[raw_w]
+                            break
+
+            # 4. Context inheritance fallback (only if NO unit was detected)
+            if not param_key and last_seen_param:
+                if last_seen_param == "pH" and 3.5 <= val <= 11.5:
+                    param_key = "pH"
+                elif last_seen_param in ("DO", "TAN") and 0.0 <= val <= 25.0:
+                    param_key = last_seen_param
+                elif last_seen_param == "temperature" and 0.0 <= val <= 50.0:
+                    param_key = "temperature"
+                elif last_seen_param == "salinity" and 0.0 <= val <= 70.0:
+                    param_key = "salinity"
+
+            if param_key:
+                if not unit:
+                    unit = DEFAULT_UNITS.get(param_key, "")
+                temporal = extract_temporal_aspect(token)
+                telemetry.append({
+                    "parameter": param_key,
+                    "value": val,
+                    "unit": unit,
+                    "temporal": temporal
+                })
+                claimed_tokens.add(token.i)
+
+    # Pass 2: Conversational Slot-Filling for Naked Numbers
+    if pending_metrics:
+        unclaimed_numbers = []
+        for token in doc:
+            if token.i not in claimed_tokens and (token.like_num or token.pos_ == "NUM"):
+                cleaned = re.sub(r"[^\d.]", "", token.text)
+                if cleaned:
+                    try:
+                        unclaimed_numbers.append(float(cleaned))
+                    except ValueError:
+                        pass
+
+        for metric, val in zip(pending_metrics, unclaimed_numbers):
+            canonical = PARAMETER_LEMMA_MAP.get(metric.lower(), metric)
+            telemetry.append({
+                "parameter": canonical,
+                "value": val,
+                "unit": DEFAULT_UNITS.get(canonical, ""),
+                "temporal": None
+            })
+
+    return telemetry
 
 def normalize_input(text: Optional[str]) -> str:
     if not text:
@@ -120,119 +310,6 @@ def check_token_or_compounds(token: spacy.tokens.Token) -> Optional[str]:
         if child.dep_ == "compound" and child.lemma_.lower() in PARAMETER_LEMMA_MAP:
             return PARAMETER_LEMMA_MAP[child.lemma_.lower()]
     return None
-
-
-def find_governing_parameter(token: spacy.tokens.Token) -> Optional[str]:
-    """
-    Traverses syntactic dependency links upward from a numeric token to identify
-    its governing parameter noun, resolving prepositional and adverbial chains.
-    """
-    # 1. Direct noun head: "2.2 mg/L DO", "level of 2.2"
-    head = token.head
-    direct = check_token_or_compounds(head)
-    if direct:
-        return direct
-
-    # 2. Traverse prepositional / adverbial chains ("dropped down to 2.2", "is at 2.2")
-    curr = head
-    while curr.pos_ in ("ADP", "ADV", "PART") and curr.head != curr:
-        curr = curr.head
-
-    # Check if the climbed head is directly a parameter or a predicate governing a parameter subject
-    climbed = check_token_or_compounds(curr)
-    if climbed:
-        return climbed
-
-    if curr.pos_ in ("VERB", "AUX"):
-        for child in curr.children:
-            if child.dep_ in ("nsubj", "nsubjpass", "dobj", "attr"):
-                param = check_token_or_compounds(child)
-                if param:
-                    return param
-
-    return None
-
-
-def extract_telemetry(doc: spacy.tokens.Doc, pending_metrics: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-    telemetry = []
-    claimed_tokens = set()
-
-    for token in doc:
-        if token.like_num or token.pos_ == "NUM":
-            cleaned = re.sub(r"[^\d.]", "", token.text)
-            if not cleaned:
-                continue
-            try:
-                val = float(cleaned)
-            except ValueError:
-                continue
-
-            param_key = find_governing_parameter(token)
-
-            # Proximity fallback: Scan ±4 tokens for parameter keywords
-            if not param_key:
-                for offset in (-1, -2, -3, -4, 1, 2):
-                    idx = token.i + offset
-                    if 0 <= idx < len(doc):
-                        w = doc[idx].lemma_.lower().rstrip(":")
-                        if w in PARAMETER_LEMMA_MAP:
-                            param_key = PARAMETER_LEMMA_MAP[w]
-                            break
-                        raw_w = doc[idx].text.lower().rstrip(":")
-                        if raw_w in PARAMETER_LEMMA_MAP:
-                            param_key = PARAMETER_LEMMA_MAP[raw_w]
-                            break
-
-            # Look ahead across tokens to reconstruct split units (e.g., ['mg', '/', 'l'] -> 'mg/l')
-            window_slice = doc[token.i + 1 : min(len(doc), token.i + 5)]
-            forward_text = "".join(t.text.lower() for t in window_slice)
-
-            # Unit-deduction fallback (resolves "reads 7.2 mg/L" when DO is omitted)
-            if not param_key:
-                if forward_text.startswith(("mg/l", "ppm", "mg/lt", "mg")):
-                    param_key = "DO"
-                elif forward_text.startswith(("ppt", "psu")):
-                    param_key = "salinity"
-                elif forward_text.startswith(("c", "°c", "celsius")):
-                    param_key = "temperature"
-
-            if param_key:
-                unit = DEFAULT_UNITS.get(param_key, "")
-                if forward_text.startswith(("mg/l", "ppm", "mg/lt")):
-                    unit = "mg/L"
-                elif forward_text.startswith(("ppt", "psu")):
-                    unit = "ppt"
-                elif forward_text.startswith(("c", "°c", "celsius")):
-                    unit = "°C"
-
-                telemetry.append({
-                    "parameter": param_key,
-                    "value": val,
-                    "unit": unit
-                })
-                claimed_tokens.add(token.i)
-
-    # Pass 2: Conversational Slot-Filling for Naked Numbers
-    if pending_metrics:
-        unclaimed_numbers = []
-        for token in doc:
-            if token.i not in claimed_tokens and (token.like_num or token.pos_ == "NUM"):
-                cleaned = re.sub(r"[^\d.]", "", token.text)
-                if cleaned:
-                    try:
-                        unclaimed_numbers.append(float(cleaned))
-                    except ValueError:
-                        pass
-
-        for metric, val in zip(pending_metrics, unclaimed_numbers):
-            canonical = PARAMETER_LEMMA_MAP.get(metric.lower(), metric)
-            telemetry.append({
-                "parameter": canonical,
-                "value": val,
-                "unit": DEFAULT_UNITS.get(canonical, "")
-            })
-
-    return telemetry
 
 
 def extract_clinical_symptoms(doc: spacy.tokens.Doc) -> List[str]:
