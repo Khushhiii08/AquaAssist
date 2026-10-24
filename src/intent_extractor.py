@@ -17,6 +17,7 @@ except OSError:
     nlp = spacy.load("en_core_web_sm")
 
 # Recognized limnological and water-quality concept roots
+# INVARIANT RC-01: 'probe' and 'meter' are hardware descriptors, NOT Dissolved Oxygen.
 PARAMETER_LEMMA_MAP = {
     # Dissolved Oxygen
     "oxygen": "DO",
@@ -25,13 +26,15 @@ PARAMETER_LEMMA_MAP = {
     "d0": "DO",
     "o2": "DO",
     "dissolved oxygen": "DO",
-    "probe": "DO",  
-    "meter": "DO",  
     "hypoxia": "DO",
+    "ఆక్సిజన్": "DO",
     # pH / Acidity
     "ph": "pH",
     "acidity": "pH",
     "alkalinity": "alkalinity",
+    "పిహెచ్": "pH",
+    "ఆల్కలినిటీ": "alkalinity",
+    "క్షారత": "alkalinity",
     # Nitrogenous Waste
     "ammonia": "TAN",
     "tan": "TAN",
@@ -39,15 +42,25 @@ PARAMETER_LEMMA_MAP = {
     "nh4": "TAN",
     "nitrite": "NO2",
     "nitrate": "NO3",
+    "అమ్మోనియా": "TAN",
     # Physical / Environmental
     "temperature": "temperature",
     "temp": "temperature",
+    "c": "temperature",
+    "°c": "temperature",
+    "celsius": "temperature",
     "salinity": "salinity",
+    "ppt": "salinity",
     "transparency": "transparency",
     "turbidity": "turbidity",
     "depth": "depth",
-    "orp": "ORP"
+    "orp": "ORP",
+    "లవణీయత": "salinity",
+    "ఉష్ణోగ్రత": "temperature"
 }
+
+# Ambiguous hardware identifiers that should never be mapped directly to a parameter
+AMBIGUOUS_HARDWARE_TOKENS = {"probe", "meter", "sensor", "kit"}
 
 UNIT_NORMALIZATION = {
     "ppm": "mg/L",
@@ -78,7 +91,171 @@ DEFAULT_UNITS = {
     "ORP": "mV"
 }
 
-TEMPORAL_MODIFIERS = {"morning", "dawn", "afternoon", "evening", "night", "dusk", "noon", "am", "pm"}
+TEMPORAL_MODIFIERS = {
+    "morning", "dawn", "afternoon", "evening", "night", "dusk", "noon",
+    "am", "pm", "gantalaki", "గంటలకు"
+}
+
+# Tokens that indicate a number is a timestamp or hour, not water telemetry
+TIME_INDICATORS = {"am", "pm", "gantalaki", "గంటలకు", "hours", "hrs", "o'clock", "clock"}
+
+
+def is_timestamp_token(token: spacy.tokens.Token) -> bool:
+    """
+    INVARIANT RC-01: Detects if a numeric token is part of a timestamp or hour marker
+    (e.g., '4 am', '6 pm', '5 gantalaki') to prevent overwriting telemetry.
+    """
+    doc = token.doc
+    # Check immediately following token (e.g. [4] [am])
+    if token.i + 1 < len(doc):
+        next_t = doc[token.i + 1].text.lower().rstrip(".,:")
+        if next_t in TIME_INDICATORS:
+            return True
+    # Check token + 2 for spaced constructs (e.g. [4] [:] [00])
+    if token.i + 2 < len(doc) and doc[token.i + 1].text in (":", "."):
+        if doc[token.i + 2].like_num:
+            return True
+    return False
+
+
+def extract_temporal_aspect(token: spacy.tokens.Token) -> Optional[str]:
+    """Finds temporal words (morning, afternoon, etc.) near the measurement token."""
+    start = max(0, token.i - 6)
+    end = min(len(token.doc), token.i + 6)
+    for t in token.doc[start:end]:
+        t_clean = t.text.lower().rstrip(".,:")
+        if t_clean in TEMPORAL_MODIFIERS:
+            return t_clean
+    return None
+
+
+def extract_telemetry(doc: spacy.tokens.Doc, pending_metrics: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    telemetry = []
+    claimed_tokens = set()
+    last_seen_param = None
+
+    for token in doc:
+        token_lemma = token.lemma_.lower().rstrip(":")
+        token_text = token.text.lower().rstrip(":")
+        
+        # Track active parameter keyword in sentence, ignoring ambiguous hardware words
+        if token_lemma in PARAMETER_LEMMA_MAP:
+            last_seen_param = PARAMETER_LEMMA_MAP[token_lemma]
+        elif token_text in PARAMETER_LEMMA_MAP:
+            last_seen_param = PARAMETER_LEMMA_MAP[token_text]
+
+        if token.like_num or token.pos_ == "NUM":
+            # INVARIANT RC-01: Ignore numbers that represent time/hours (e.g., '4 am', '6 am')
+            if is_timestamp_token(token):
+                continue
+
+            cleaned = re.sub(r"[^\d.]", "", token.text)
+            if not cleaned:
+                continue
+            try:
+                val = float(cleaned)
+            except ValueError:
+                continue
+
+            # 1. Syntactic dependency lookup
+            param_key = find_governing_parameter(token)
+
+            # 2. Forward window unit deduction
+            next_token = doc[token.i + 1] if token.i + 1 < len(doc) else None
+            next_raw = next_token.text.lower().rstrip(".,:;") if next_token else ""
+            
+            window_slice = doc[token.i + 1 : min(len(doc), token.i + 5)]
+            forward_text = "".join(t.text.lower().rstrip(".,:;") for t in window_slice)
+
+            detected_unit = ""
+            inferred_param_from_unit = None
+
+            # Check unambiguous units first (bijective mappings)
+            if forward_text.startswith(("ppt", "psu")) or next_raw in ("ppt", "psu"):
+                detected_unit = "ppt"
+                inferred_param_from_unit = "salinity"
+            elif next_raw in ("c", "°c", "celsius", "deg") or forward_text.startswith(("°c", "celsius")):
+                detected_unit = "°C"
+                inferred_param_from_unit = "temperature"
+            elif forward_text.startswith(("mg/l", "ppm", "mg/lt")) or next_raw in ("mg/l", "ppm"):
+                detected_unit = "mg/L"
+                if not param_key and not last_seen_param:
+                    inferred_param_from_unit = "DO"
+
+            # INVARIANT RC-01: Strict Parameter Immutability
+            if param_key:
+                unit = detected_unit or DEFAULT_UNITS.get(param_key, "")
+            elif inferred_param_from_unit:
+                param_key = inferred_param_from_unit
+                unit = detected_unit
+            else:
+                unit = detected_unit
+
+            # 3. Proximity fallback: Scan ±5 tokens if still unknown
+            if not param_key:
+                for offset in (-1, -2, -3, -4, -5, 1, 2):
+                    idx = token.i + offset
+                    if 0 <= idx < len(doc):
+                        w = doc[idx].lemma_.lower().rstrip(":")
+                        if w in PARAMETER_LEMMA_MAP:
+                            param_key = PARAMETER_LEMMA_MAP[w]
+                            break
+                        raw_w = doc[idx].text.lower().rstrip(":")
+                        if raw_w in PARAMETER_LEMMA_MAP:
+                            param_key = PARAMETER_LEMMA_MAP[raw_w]
+                            break
+
+            # 4. Context inheritance fallback (only if NO contradictory unit was detected)
+            if not param_key and last_seen_param:
+                if last_seen_param == "pH" and 3.5 <= val <= 11.5:
+                    param_key = "pH"
+                elif last_seen_param in ("DO", "TAN", "NO2", "NO3", "alkalinity"):
+                    # Only inherit concentration parameters if unit is compatible
+                    if not unit or unit == "mg/L":
+                        param_key = last_seen_param
+                elif last_seen_param == "temperature" and 0.0 <= val <= 50.0:
+                    if not unit or unit == "°C":
+                        param_key = "temperature"
+                elif last_seen_param == "salinity" and 0.0 <= val <= 70.0:
+                    if not unit or unit == "ppt":
+                        param_key = "salinity"
+
+            if param_key:
+                if not unit:
+                    unit = DEFAULT_UNITS.get(param_key, "")
+                temporal = extract_temporal_aspect(token) or "current"
+                telemetry.append({
+                    "parameter": param_key,
+                    "value": val,
+                    "unit": unit,
+                    "temporal": temporal
+                })
+                claimed_tokens.add(token.i)
+
+    # Pass 2: Conversational Slot-Filling for Naked Numbers
+    if pending_metrics:
+        unclaimed_numbers = []
+        for token in doc:
+            if token.i not in claimed_tokens and (token.like_num or token.pos_ == "NUM"):
+                if is_timestamp_token(token):
+                    continue
+                cleaned = re.sub(r"[^\d.]", "", token.text)
+                if cleaned:
+                    try:
+                        unclaimed_numbers.append(float(cleaned))
+                    except ValueError:
+                        pass
+
+        for metric, val in zip(pending_metrics, unclaimed_numbers):
+            canonical = PARAMETER_LEMMA_MAP.get(metric.lower(), metric)
+            telemetry.append({
+                "parameter": canonical,
+                "value": val,
+                "unit": DEFAULT_UNITS.get(canonical, ""),
+                "temporal": None
+            })
+
+    return telemetry
 
 def extract_temporal_aspect(token: spacy.tokens.Token) -> Optional[str]:
     """Finds temporal words (morning, afternoon, etc.) near the measurement token."""
@@ -153,120 +330,6 @@ def find_governing_parameter(num_token: spacy.tokens.Token) -> Optional[str]:
         depth += 1
 
     return None
-
-def extract_telemetry(doc: spacy.tokens.Doc, pending_metrics: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-    telemetry = []
-    claimed_tokens = set()
-    last_seen_param = None
-
-    for token in doc:
-        # Track active parameter keyword in sentence
-        token_lemma = token.lemma_.lower().rstrip(":")
-        token_text = token.text.lower().rstrip(":")
-        if token_lemma in PARAMETER_LEMMA_MAP:
-            last_seen_param = PARAMETER_LEMMA_MAP[token_lemma]
-        elif token_text in PARAMETER_LEMMA_MAP:
-            last_seen_param = PARAMETER_LEMMA_MAP[token_text]
-
-        if token.like_num or token.pos_ == "NUM":
-            cleaned = re.sub(r"[^\d.]", "", token.text)
-            if not cleaned:
-                continue
-            try:
-                val = float(cleaned)
-            except ValueError:
-                continue
-
-            # 1. Syntactic dependency lookup
-            param_key = find_governing_parameter(token)
-
-            # 2. Forward window unit deduction (Token-Safe)
-            next_token = doc[token.i + 1] if token.i + 1 < len(doc) else None
-            next_raw = next_token.text.lower() if next_token else ""
-            
-            window_slice = doc[token.i + 1 : min(len(doc), token.i + 5)]
-            forward_text = "".join(t.text.lower() for t in window_slice)
-
-            # Strict unit-to-parameter determination:
-            # If the unit is explicitly stated, the unit dictates the parameter!
-            inferred_param_from_unit = None
-            inferred_unit = ""
-            if forward_text.startswith(("mg/l", "ppm", "mg/lt")):
-                inferred_param_from_unit = "DO"
-                inferred_unit = "mg/L"
-            elif forward_text.startswith(("ppt", "psu")):
-                inferred_param_from_unit = "salinity"
-                inferred_unit = "ppt"
-            elif next_raw in ("c", "°c", "celsius") or forward_text.startswith(("°c", "celsius")):
-                inferred_param_from_unit = "temperature"
-                inferred_unit = "°C"
-
-            # If unit provides a clear parameter, prioritize it over vague inheritance
-            if inferred_param_from_unit:
-                param_key = inferred_param_from_unit
-                unit = inferred_unit
-            else:
-                unit = DEFAULT_UNITS.get(param_key, "") if param_key else ""
-
-            # 3. Proximity fallback: Scan ±5 tokens if still unknown
-            if not param_key:
-                for offset in (-1, -2, -3, -4, -5, 1, 2):
-                    idx = token.i + offset
-                    if 0 <= idx < len(doc):
-                        w = doc[idx].lemma_.lower().rstrip(":")
-                        if w in PARAMETER_LEMMA_MAP:
-                            param_key = PARAMETER_LEMMA_MAP[w]
-                            break
-                        raw_w = doc[idx].text.lower().rstrip(":")
-                        if raw_w in PARAMETER_LEMMA_MAP:
-                            param_key = PARAMETER_LEMMA_MAP[raw_w]
-                            break
-
-            # 4. Context inheritance fallback (only if NO unit was detected)
-            if not param_key and last_seen_param:
-                if last_seen_param == "pH" and 3.5 <= val <= 11.5:
-                    param_key = "pH"
-                elif last_seen_param in ("DO", "TAN") and 0.0 <= val <= 25.0:
-                    param_key = last_seen_param
-                elif last_seen_param == "temperature" and 0.0 <= val <= 50.0:
-                    param_key = "temperature"
-                elif last_seen_param == "salinity" and 0.0 <= val <= 70.0:
-                    param_key = "salinity"
-
-            if param_key:
-                if not unit:
-                    unit = DEFAULT_UNITS.get(param_key, "")
-                temporal = extract_temporal_aspect(token) or "current"
-                telemetry.append({
-                    "parameter": param_key,
-                    "value": val,
-                    "unit": unit,
-                    "temporal": temporal
-                })
-                claimed_tokens.add(token.i)
-
-    # Pass 2: Conversational Slot-Filling for Naked Numbers
-    if pending_metrics:
-        unclaimed_numbers = []
-        for token in doc:
-            if token.i not in claimed_tokens and (token.like_num or token.pos_ == "NUM"):
-                cleaned = re.sub(r"[^\d.]", "", token.text)
-                if cleaned:
-                    try:
-                        unclaimed_numbers.append(float(cleaned))
-                    except ValueError:
-                        pass
-
-        for metric, val in zip(pending_metrics, unclaimed_numbers):
-            canonical = PARAMETER_LEMMA_MAP.get(metric.lower(), metric)
-            telemetry.append({
-                "parameter": canonical,
-                "value": val,
-                "unit": DEFAULT_UNITS.get(canonical, ""),
-                "temporal": None
-            })
-
-    return telemetry
 
 def normalize_input(text: Optional[str]) -> str:
     if not text:

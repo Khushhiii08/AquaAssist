@@ -12,6 +12,8 @@ from typing import List, Dict, Any, Optional
 import torch
 from llama_cpp import Llama
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+import atexit
+import gc
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -24,6 +26,18 @@ _LLM_INSTANCE = None
 _TRANSLATOR_MODEL = None
 _TRANSLATOR_TOKENIZER = None
 
+def cleanup_slm():
+    global _LLM_INSTANCE
+    if _LLM_INSTANCE is not None:
+        try:
+            # Explicitly close the underlying C++ model and context
+            _LLM_INSTANCE.close()
+        except Exception:
+            pass
+        _LLM_INSTANCE = None
+        gc.collect()
+
+atexit.register(cleanup_slm)
 
 def get_slm():
     """Lazy-loads local Qwen SLM with safe context allocation."""
@@ -31,18 +45,19 @@ def get_slm():
     if _LLM_INSTANCE is None:
         if os.path.exists(MODEL_PATH):
             print(f"[*] Loading Qwen 2.5 SLM from {MODEL_PATH}...")
+            # Detect Apple Silicon MPS / Metal support
+            has_metal = torch.backends.mps.is_available()
             _LLM_INSTANCE = Llama(
                 model_path=MODEL_PATH,
                 n_threads=2,
                 n_batch=512,
                 n_ctx=2048,
-                n_gpu_layers=0,  # Stable across all platforms and test suites
+                n_gpu_layers=-1 if has_metal else 0,  # Metal GPU offload on macOS
                 verbose=False
             )
         else:
             print(f"[!] Warning: GGUF model not found at {MODEL_PATH}. Running in extractive fallback mode.")
     return _LLM_INSTANCE
-
 
 def get_translator():
     """
@@ -63,7 +78,8 @@ def get_translator():
         )
         _TRANSLATOR_MODEL = AutoModelForSeq2SeqLM.from_pretrained(
             model_path,
-            local_files_only=True
+            local_files_only=True,
+            torch_dtype=torch.float16 if DEVICE == "mps" else torch.float32
         ).to(DEVICE)
     except Exception as e:
         # Dynamic fallback to verified snapshot directory in home cache
@@ -83,11 +99,53 @@ def get_translator():
 
     return _TRANSLATOR_MODEL, _TRANSLATOR_TOKENIZER
 
+def format_evidence_context(evidence_list: List[Dict[str, Any]], max_chunks: int = 3, max_words_per_chunk: int = 150) -> str:
+    """
+    Formats the highest-scoring evidence chunks while strictly enforcing a token budget
+    to guarantee the prompt never overflows Qwen's 2048 context window.
+    """
+    context_blocks = []
+    selected_chunks = evidence_list[:max_chunks]
+    
+    for idx, chunk in enumerate(selected_chunks, start=1):
+        text = chunk.get("text", "").strip()
+        words = text.split()
+        if len(words) > max_words_per_chunk:
+            text = " ".join(words[:max_words_per_chunk]) + "..."
+            
+        meta = chunk.get("metadata", {})
+        source = meta.get("source", "Aquaculture Manual")
+        page = meta.get("page", "?")
+        context_blocks.append(f"[Document {idx} | Source: {source}, Page {page}]\n{text}")
+        
+    return "\n\n".join(context_blocks)
+
+def sanitize_slm_polarity_contradictions(text: str) -> str:
+    """
+    INVARIANT RC-07: Strips double-polarity contradictions where the SLM generates
+    an affirmative opener ('Yes,') followed by a negative safety refusal ('is not safe').
+    Example: 'Yes, malachite green is not safe...' -> 'Malachite green is not safe...'
+    """
+    if not text:
+        return ""
+    # Strip 'Yes, [chemical/practice] is not safe / not recommended / prohibited'
+    cleaned = re.sub(
+        r"^(?:yes|sure|certainly)[,\s]+([a-zA-Z0-9_\s]+?\s+is\s+(?:not\s+|never\s+|prohibited|strictly\s+banned|banned))",
+        r"\1",
+        text.strip(),
+        flags=re.IGNORECASE
+    )
+    # Capitalize the first letter if stripped
+    if cleaned and cleaned[0].islower():
+        cleaned = cleaned[0].upper() + cleaned[1:]
+    return cleaned
+
 
 def translate_to_telugu(english_text: str) -> str:
     """
     Translates English advice to natural Telugu using greedy decoding.
     Expands token budget to prevent sentence truncation and preserves scientific units.
+    INVARIANT RC-07: Domain post-processing eliminates neural calques (e.g., 'drinking water' for 'draining').
     """
     if not english_text or len(english_text.strip()) < 5:
         return ""
@@ -131,7 +189,7 @@ def translate_to_telugu(english_text: str) -> str:
             .replace("PPM_UNIT", "ppm")
         )
 
-        # Domain lexicon post-processing
+        # Domain lexicon post-processing (RC-07 Calque & Terminology Cleaning)
         cleaned = (
             restored_translation
             .replace("గ్రెయిన్", "రొయ్యలు")
@@ -142,33 +200,15 @@ def translate_to_telugu(english_text: str) -> str:
             .replace("పెంపుడు జంతువుల వ్యవస్థ", "ఆక్వాకల్చర్ వ్యవస్థ")
             .replace("కుట్టడం", "గడ్డకట్టడం")
             .replace("ఫిష్", "చేపలు")
+            # INVARIANT RC-07 Fixes:
+            .replace("నీటిని త్రాగుట", "నీటిని బయటకు పంపడం")   # 'water draining' calque fix
+            .replace("త్రాగునీరు", "నీటి మార్పిడి")               # 'drinking water' fix
+            .replace("అవును, సురక్షితం కాదు", "సురక్షితం కాదు") # Double-polarity translation fix
         )
         return cleaned
     except Exception as e:
         print(f"[!] Translation error: {e}")
         return "తెలుగు అనువాదంలో లోపం ఏర్పడింది."
-
-
-def format_evidence_context(evidence_list: List[Dict[str, Any]], max_chunks: int = 3, max_words_per_chunk: int = 150) -> str:
-    """
-    Formats the highest-scoring evidence chunks while strictly enforcing a token budget
-    to guarantee the prompt never overflows Qwen's 2048 context window.
-    """
-    context_blocks = []
-    selected_chunks = evidence_list[:max_chunks]
-    
-    for idx, chunk in enumerate(selected_chunks, start=1):
-        text = chunk.get("text", "").strip()
-        words = text.split()
-        if len(words) > max_words_per_chunk:
-            text = " ".join(words[:max_words_per_chunk]) + "..."
-            
-        meta = chunk.get("metadata", {})
-        source = meta.get("source", "Aquaculture Manual")
-        page = meta.get("page", "?")
-        context_blocks.append(f"[Document {idx} | Source: {source}, Page {page}]\n{text}")
-        
-    return "\n\n".join(context_blocks)
 
 
 def synthesize_with_slm(query: str, context: str, species: Optional[str] = None) -> Optional[str]:
@@ -248,7 +288,9 @@ def synthesize_with_slm(query: str, context: str, species: Optional[str] = None)
             top_p=0.9,
             repeat_penalty=1.18  # Prevents repetitive lines and duplicate advice loops
         )
-        return response["choices"][0]["message"]["content"].strip()
+        raw_answer = response["choices"][0]["message"]["content"].strip()
+        # Sanitize any contradictory polarity openers before returning
+        return sanitize_slm_polarity_contradictions(raw_answer)
     except Exception as e:
         print(f"[!] SLM synthesis failed: {e}")
         return None
@@ -296,11 +338,21 @@ def generate_answer(query_or_claim: str, evidence_list: List[Dict[str, Any]], sp
     # Step 2: Attempt dynamic SLM generation
     synthesized_en = synthesize_with_slm(query_or_claim, context, species=species)
 
-    # Step 3: Extractive Fallback (if SLM fails or returns None)
-    if not synthesized_en:
+    # Step 3: Extractive Fallback (INVARIANT RC-05: True Text-Content Fallback)
+    # If SLM fails or local GGUF weights are absent, fallback cleanly to top chunk prose
+    # Never return an empty string if english_synthesis is "" in ChromaDB metadata!
+    if not synthesized_en or not synthesized_en.strip():
         top_chunk = evidence_list[0]
         meta = top_chunk.get("metadata", {})
-        synthesized_en = meta.get("english_synthesis", top_chunk.get("text", "")[:300])
+        extracted = meta.get("english_synthesis")
+        if extracted and isinstance(extracted, str) and extracted.strip():
+            synthesized_en = extracted.strip()
+        else:
+            # Slices raw evidence prose cleanly to prevent blank output payloads
+            raw_chunk_text = top_chunk.get("text", "").strip()
+            synthesized_en = raw_chunk_text[:350].strip()
+            if len(raw_chunk_text) > 350:
+                synthesized_en += "..."
 
     # Step 4: Technical Telugu Translation
     synthesized_te = translate_to_telugu(synthesized_en)

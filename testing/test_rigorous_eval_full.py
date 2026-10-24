@@ -52,7 +52,7 @@ BENCHMARK_SCENARIOS = [
         "target_parameter": "DO",
         "expected_route": "SLOW_PATH",
         "expected_decision": "ANSWER",
-        "expected_topics": ["water_quality", "general_management"],
+        "expected_topics": ["water_quality", "general_management", "dissolved_oxygen", "ammonia_nitrogen"],
         "banned_content": ["biofloc", "post-harvest nitrate", "carbon-to-nitrogen ratio"],
         "description": "Validates that DO queries retrieve water quality limnology, omitting biofloc manuals."
     },

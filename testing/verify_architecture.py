@@ -83,8 +83,7 @@ def audit_decision_router(file_path):
 
   # 3. Temporal market gate present
   check(
-      "detect_temporal_or_market_query" in code
-      or "REALTIME_DATA_LIMITATION" in code,
+      "detect_temporal_or_market_query" in code or "REALTIME_DATA_LIMITATION" in code,
       "Tier 3 Temporal market pricing gate is implemented.",
       file_path,
   )
