@@ -511,12 +511,14 @@ def make_decision(evaluated_chunks: List[Dict[str, Any]]) -> str:
     if supporting:
         return "ANSWER"
 
-    # 3. Grounded Informational / Best-Evidence Match (T18 bloom management & clinical guidelines)
-    # When evidence is retrieved with good semantic proximity (< 0.75) and low contradiction (< 0.30)
+    # 3. Grounded Informational Match (Grounded Clinical Directives)
+    # TIGHTENED (P0 Safety Invariant):
+    # An ANSWER requires genuine positive evidence entailment (entailment >= 0.25).
+    # Neutral evidence indicates missing or ungrounded facts, which must CLARIFY or ABSTAIN.
     if (
         top_chunk.get("distance", 1.0) < 0.75
-        and top_chunk.get("contradiction", 0.0) < 0.30
-        and (top_chunk.get("entailment", 0.0) >= 0.12 or top_chunk.get("neutral", 0.0) >= 0.40)
+        and top_chunk.get("contradiction", 0.0) < 0.25
+        and top_chunk.get("entailment", 0.0) >= 0.25
     ):
         return "ANSWER"
 

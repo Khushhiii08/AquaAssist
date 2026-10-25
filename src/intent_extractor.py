@@ -23,6 +23,8 @@ PARAMETER_LEMMA_MAP = {
     "oxygen": "DO",
     "do": "DO",
     "d.o.": "DO",
+    "d.o": "DO",
+    "do.": "DO",
     "d0": "DO",
     "o2": "DO",
     "dissolved oxygen": "DO",
@@ -100,21 +102,44 @@ TEMPORAL_MODIFIERS = {
 TIME_INDICATORS = {"am", "pm", "gantalaki", "గంటలకు", "hours", "hrs", "o'clock", "clock"}
 
 
+OPERATIONAL_METADATA_TOKENS = {
+    "acre", "acres", "ha", "hectare", "hectares", "feet", "ft", "inch", "inches",
+    "doc", "day", "days", "d", "tray", "trays", "bag", "bags", "kg", "kgs",
+    "hr", "hrs", "hour", "hours", "min", "mins", "minute", "minutes",
+    "pond", "tank", "count", "nos", "pcs", "batch", "tanki"
+}
+
 def is_timestamp_token(token: spacy.tokens.Token) -> bool:
     """
-    INVARIANT RC-01: Detects if a numeric token is part of a timestamp or hour marker
-    (e.g., '4 am', '6 pm', '5 gantalaki') to prevent overwriting telemetry.
+    INVARIANT RC-01 & STRESS-P0:
+    Detects if a numeric token represents time, clock markers, or operational farm metadata
+    (e.g., '5:30', '4:45am', 'DOC 78', '4 trays', '3 acre', '1.5 hr').
     """
+    raw_text = token.text.lower().strip(".,()[]{}")
+    
+    # 1. Regex check for unspaced colon timestamps (e.g., 5:30, 04:45am, 17:00)
+    if re.match(r"^\d{1,2}:\d{2}(?:am|pm)?$", raw_text):
+        return True
+
     doc = token.doc
-    # Check immediately following token (e.g. [4] [am])
+    
+    # 2. Check forward token for timestamp or operational unit indicators
     if token.i + 1 < len(doc):
-        next_t = doc[token.i + 1].text.lower().rstrip(".,:")
-        if next_t in TIME_INDICATORS:
+        next_t = doc[token.i + 1].text.lower().rstrip(".,:;()[]")
+        if next_t in TIME_INDICATORS or next_t in OPERATIONAL_METADATA_TOKENS:
             return True
-    # Check token + 2 for spaced constructs (e.g. [4] [:] [00])
+            
+    # 3. Check for spaced colon time constructs (e.g., [5] [:] [30])
     if token.i + 2 < len(doc) and doc[token.i + 1].text in (":", "."):
         if doc[token.i + 2].like_num:
             return True
+
+    # 4. Check backward token for operational unit prefixes (e.g., 'DOC 78', 'pond 4', 'tank 2', 'count 40')
+    if token.i > 0:
+        prev_t = doc[token.i - 1].text.lower().lstrip(".,:;()[]")
+        if prev_t in {"doc", "pond", "tank", "tray", "trays", "count", "no", "nos"}:
+            return True
+
     return False
 
 
@@ -182,8 +207,17 @@ def extract_telemetry(doc: spacy.tokens.Doc, pending_metrics: Optional[List[str]
                 if not param_key and not last_seen_param:
                     inferred_param_from_unit = "DO"
 
-            # INVARIANT RC-01: Strict Parameter Immutability
-            if param_key:
+            # --- INVARIANT P0: BIJECTIVE PHYSICAL UNIT INVARIANCE ---
+            # Bijective physical units (ppt -> salinity, °C -> temperature) mathematically
+            # cannot represent other parameters, overriding any long-range parse misattachments.
+            if inferred_param_from_unit in ("salinity", "temperature"):
+                param_key = inferred_param_from_unit
+                unit = detected_unit
+            elif param_key in ("pH", "temperature", "salinity") and detected_unit in ("mg/L", "ppm"):
+                # Concentration units contradict pH or temperature; re-route to concentration
+                param_key = last_seen_param if last_seen_param in ("DO", "TAN", "NO2", "NO3", "alkalinity") else "DO"
+                unit = detected_unit
+            elif param_key:
                 unit = detected_unit or DEFAULT_UNITS.get(param_key, "")
             elif inferred_param_from_unit:
                 param_key = inferred_param_from_unit

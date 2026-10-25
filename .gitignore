@@ -26,6 +26,19 @@ models/*.gguf
 models/*.bin
 models/deberta_aquaculture_router/
 
+# Evaluation sheets and query workbooks
+messy_query_excelsheets/
+real_life_messy_queries/
+*.xlsx
+*.xls
+
+# Test result folders and execution traces
+24OCT_real_life_query_test_results/
+25OCT_after-stresstest-correction*/
+test_results/
+*.jsonl
+blind_eval_results_*.json
+
 # Audio cache
 temp_audio/
 temp_16khz_mono.wav

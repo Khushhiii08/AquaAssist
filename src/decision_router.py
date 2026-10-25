@@ -27,8 +27,9 @@ AQUACULTURE_DOMAIN_LEMMAS = {
     # Organisms (Telugu Script)
     "చేప", "చేపలు", "రొయ్య", "రొయ్యలు", "పీత", "పీతలు",
     # Romanized Telugu transliterations
-    "chepa", "chepalu", "royya", "royyalu", "peetha", "peethalu",
-    "cheruvu", "cheruvulo", "neeru", "neellu", "vellu", "udayam", "sayantram",
+    # Romanized Telugu transliterations & inflections
+    "chepa", "chepalu", "chepala", "chepalaku", "royya", "royyalu", "royyala", "royyalaku", "peetha", "peethalu", "peethala",
+    "cheruvu", "cheruvulo", "cheruvula", "shell", "gut", "white gut", "growth", "neeru", "neellu", "vellu", "udayam", "sayantram",
     "entha", "veyali", "kalapali", "penchavacha", "vastunda", "taggindi", "perigindi",
     "mandhu", "sunnam", "theetha", "thindi", "meetha",
     # Habitat, Limnology & Units
@@ -68,9 +69,17 @@ BANNED_SUBSTANCES_PATTERNS = [
     r"\bfurazolidone\b",
     r"\bmalachite green\b",
     r"\bendosulfan\b",
+    r"\bdichlorvos\b",
+    r"\bnuvan\b",
+    r"\bchlorpyrifos\b",
+    r"\bcypermethrin\b",
+    r"\bmetabisulfite\b",
+    r"\bsodium metabisulfite\b",
     r"\bpesticide\b",
+    r"\binsecticide\b",
     r"పురుగుమందు",
-    r"క్లోరాంఫెనికాల్"
+    r"క్లోరాంఫెనికాల్",
+    r"నువాన్"
 ]
 
 # Antibiotic prescription requests (Must be refused - System cannot prescribe drugs)
@@ -156,6 +165,21 @@ HAZARDOUS_PAIRS = [
     ("bleach", "probiotic")
 ]
 
+def detect_biological_absurdity(doc: spacy.tokens.Doc) -> Optional[str]:
+    """
+    Tier 1b: Detects biological absurdity / nonsense queries (e.g., 'why are shrimps not flying?').
+    """
+    text_lower = doc.text.lower()
+    absurd_actions = [
+        "fly", "flying", "flew", "drive", "driving", "play tennis", "playing tennis",
+        "play cricket", "playing cricket", "sing", "singing", "dance", "dancing",
+        "write code", "coding", "walk on the moon", "breathe fire", "drive a car"
+    ]
+    has_animal = any(w in text_lower for w in ["shrimp", "shrimps", "fish", "prawn", "prawns", "crab", "crabs", "royyalu", "chepalu"])
+    has_absurd_action = any(act in text_lower for act in absurd_actions)
+    if has_animal and has_absurd_action:
+        return "OUT_OF_DOMAIN"
+    return None
 
 def is_aquaculture_domain(doc: spacy.tokens.Doc, session_state: Optional[Dict[str, Any]] = None) -> bool:
     """Tier 1 Gate: Confirms inquiry belongs strictly to aquaculture."""
@@ -235,8 +259,9 @@ def detect_chemical_hazards(doc: spacy.tokens.Doc) -> Optional[str]:
     # 6. Therapeutic Biocide Dosing Refusal (Formalin, CuSO4, KMnO4 for disease/algae -> ABSTAIN)
     dose_triggers = [
         "how many kg", "how much", "what dose", "dosage", "how much powder", "how many grams",
-        "how many liters", "మోతాదు", "entha veyali", "ఎంత వాడాలి", "entha kalapali",
-        "ఎన్ని కిలోలు వేయాలి", "ఎంత వేయాలి", "ఎంత సున్నం వేయాలి"
+        "how many liters", "how many bags", "how many packets", "మోతాదు", "entha veyali", 
+        "ఎంత వాడాలి", "entha kalapali", "ఎన్ని కిలోలు వేయాలి", "ఎంత వేయాలి", "ఎంత సున్నం వేయాలి",
+        "enni bastalu", "enni bags", "చల్లమంటారు"
     ]
     has_dose_inquiry = any(dt in text_lower for dt in dose_triggers)
 
@@ -362,6 +387,11 @@ def route_query_policy(raw_query: str, session_state: Optional[Dict[str, Any]] =
     # Tier 1: Aquaculture Domain Gate (State Aware)
     if not is_aquaculture_domain(doc, session_state=session_state):
         return "POLICY_INTERCEPT", "OUT_OF_DOMAIN"
+
+    # Tier 1b: Biological Absurdity / Nonsense Guard
+    absurdity_key = detect_biological_absurdity(doc)
+    if absurdity_key:
+        return "POLICY_INTERCEPT", absurdity_key
 
     # Tier 2: Chemical Safety, Therapeutic Dosing, & Banned Substances
     hazard_key = detect_chemical_hazards(doc)
