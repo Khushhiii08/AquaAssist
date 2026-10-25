@@ -142,7 +142,6 @@ AquaAssist/
 ├── app.py                              # Gradio multi-session UI, edge-tts audio, & unified pipeline
 ├── batch_evaluate_aquaassist.py        # Multi-workbook end-to-end evaluator (auto-fills Excel + JSONL traces)
 ├── constraints.gbnf                    # Strict GBNF JSON grammar used during offline manual ingestion
-├── conference_101719.tex               # IEEE conference manuscript documenting architecture & evaluations
 ├── requirements.txt                    # Python dependencies (including pinned en_core_web_sm wheel)
 ├── packages.txt                        # OS-level packages for Hugging Face Spaces (ffmpeg, build-essential)
 ├── Dockerfile                          # Container build (Python 3.11-slim + pre-cached Whisper base)
