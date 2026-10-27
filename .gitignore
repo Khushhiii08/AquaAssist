@@ -36,13 +36,16 @@ batch_test.py
 *.pdf
 
 # Test result folders and execution traces
+adjudicate_fill.py
 24OCT_real_life_query_test_results/
 25OCT_after-stresstest-correction*/
 test_results/
 *.jsonl
 blind_eval_results_*.json
 runs/
+results/
 results_preview/
+results_final/
 scoring/
 llama.cpp/
 
