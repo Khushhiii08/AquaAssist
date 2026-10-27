@@ -27,10 +27,13 @@ models/*.bin
 models/deberta_aquaculture_router/
 
 # Evaluation sheets and query workbooks
+aqua_compare/
 messy_query_excelsheets/
 real_life_messy_queries/
+batch_test.py
 *.xlsx
 *.xls
+*.pdf
 
 # Test result folders and execution traces
 24OCT_real_life_query_test_results/
@@ -38,6 +41,10 @@ real_life_messy_queries/
 test_results/
 *.jsonl
 blind_eval_results_*.json
+runs/
+results_preview/
+scoring/
+llama.cpp/
 
 # Audio cache
 temp_audio/
@@ -49,5 +56,6 @@ bin/
 # Local Test Outputs, Spreadsheets, & Logs
 retrieval_output.txt
 *.xlsx
+*.tex
 *.csv
 EOF

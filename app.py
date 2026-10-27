@@ -224,22 +224,48 @@ get_diagnostic_engine()
 
 
 # --- 4. THE UNIFIED PIPELINE ---
-def _format_debug(farmer_query: str, hypothesis: str, evidence: List[Dict[str, Any]], state: Dict[str, Any]) -> str:
+def _format_debug(
+    farmer_query: str,
+    hypothesis: str,
+    evidence: List[Dict[str, Any]],
+    state: Dict[str, Any],
+    stage_info: Optional[Dict[str, Any]] = None
+) -> str:
+    stage_info = stage_info or {}
+    policy_flag = stage_info.get("policy", "CLEARED (Passed Tiers 1-4)")
+    health_flag = stage_info.get("health", "NORMAL (No Fatal Telemetry)")
+    
     lines = [
-        f"Raw Farmer Query:\n{farmer_query}",
-        "",
-        f"Retrieval Search Prompt:\n{hypothesis}",
-        "",
-        "NLI Verification Results:"
+        "============================================================",
+        "          AQUAASSIST NEURO-SYMBOLIC PIPELINE TRACE          ",
+        "============================================================",
+        f" [1] RAW INPUT: \"{farmer_query}\"",
+        f" [2] CONVERSATIONAL REWRITE: \"{hypothesis}\"",
+        "------------------------------------------------------------",
+        f" [3] SAFETY POLICY GATE : {policy_flag}",
+        f" [4] TELEMETRY HEALTH   : {health_flag}",
+        "------------------------------------------------------------",
+        " [5] EXTRACTED SYMBOLIC STATE:",
+        f"     • Species Detected : {state.get('species')}",
+        f"     • Habitat          : {state.get('habitat')}",
+        f"     • Telemetry Matrix : {state.get('telemetry')}",
+        f"     • Symptoms Active  : {list(state.get('symptoms') or [])}",
+        "------------------------------------------------------------",
+        " [6] CHROMADB TOP-K EVIDENCE & DeBERTa NLI ENTAILMENT:"
     ]
-    for chunk in evidence or []:
-        lines.append(
-            f"ID: {chunk.get('id', 'N/A')} | Dist: {chunk.get('distance', 0.0):.4f}\n"
-            f"Entailment: {chunk.get('entailment', 0.0):.4f} | "
-            f"Neutral: {chunk.get('neutral', 0.0):.4f} | "
-            f"Contradiction: {chunk.get('contradiction', 0.0):.4f}"
-        )
-    lines += ["", f"Active Persistent State: {state}"]
+    
+    if evidence:
+        for idx, chunk in enumerate(evidence, 1):
+            lines.append(
+                f"     [{idx}] Doc: {chunk.get('metadata', {}).get('source', 'Manual')} (p. {chunk.get('metadata', {}).get('page', '?')})\n"
+                f"         Vector Dist: {chunk.get('distance', 0.0):.4f} | "
+                f"Entailment: {chunk.get('entailment', 0.0):.3f} | "
+                f"Contradiction: {chunk.get('contradiction', 0.0):.3f}"
+            )
+    else:
+        lines.append("     (No external retrieval triggered / Intercepted or Fast-Path)")
+        
+    lines.append("============================================================")
     return "\n".join(lines)
 
 
@@ -607,18 +633,19 @@ with gr.Blocks(title="AquaAssist", theme=gr.themes.Soft()) as demo:
     gr.Markdown("# 🌊 AquaAssist: Offline Aquaculture Diagnostic Assistant")
     gr.Markdown("Grounded Limnological Diagnosis & Decision Support — Telugu (తెలుగు) & English")
 
-    chatbot = gr.Chatbot(type="messages", label="Diagnostic Consultation", height=460)
-    tts_out = gr.Audio(label="Spoken Response (వాణి సలహా)", autoplay=True, interactive=False, type="filepath")
-
     with gr.Row():
-        text_in = gr.Textbox(placeholder="Describe pond symptoms, parameters (e.g. DO, pH), or ask questions in English or Telugu...", label="Query / ప్రశ్న", lines=2, scale=3)
-        audio_in = gr.Audio(sources=["microphone", "upload"], type="filepath", label="🎤 Record / Upload Voice (Telugu or English)", scale=2)
-    send_btn = gr.Button("Submit Analysis / విశ్లేషించండి", variant="primary")
+        with gr.Column(scale=6):
+            chatbot = gr.Chatbot(type="messages", label="Diagnostic Consultation", height=460)
+            tts_out = gr.Audio(label="Spoken Response (వాణి సలహా)", autoplay=True, interactive=False, type="filepath")
+            with gr.Row():
+                text_in = gr.Textbox(placeholder="Describe pond symptoms, parameters (e.g. DO, pH), or ask questions in English or Telugu...", label="Query / ప్రశ్న", lines=2, scale=3)
+                audio_in = gr.Audio(sources=["microphone", "upload"], type="filepath", label="🎤 Record / Upload Voice (Telugu or English)", scale=2)
+            send_btn = gr.Button("Submit Analysis / విశ్లేషించండి", variant="primary")
+            export_btn = gr.DownloadButton("📄 Export Diagnostic Log", visible=False)
 
-    export_btn = gr.DownloadButton("📄 Export Diagnostic Log", visible=False)
-
-    with gr.Accordion("🔍 Engineering Verification & NLI Traces", open=False):
-        debug_box = gr.Textbox(label="Pipeline Trace", lines=12, interactive=False)
+        with gr.Column(scale=5):
+            with gr.Accordion("🔍 Engineering Verification & NLI Traces", open=True):
+                debug_box = gr.Textbox(label="Pipeline Trace", lines=24, interactive=False)
 
     conversation_outputs = [chatbot, sessions_state, current_session_id, diagnostic_state, text_in, audio_in, tts_out, export_btn, debug_box, session_radio]
     submit_inputs = [text_in, audio_in, sessions_state, current_session_id, diagnostic_state]
