@@ -268,6 +268,18 @@ def _format_debug(
     lines.append("============================================================")
     return "\n".join(lines)
 
+@spaces.GPU
+def _run_gpu_diagnostic(search_prompt, state, active_param):
+    """ZeroGPU context strictly reserved for embedding & neural NLI scoring."""
+    embedding_model, nli_model, collection = get_diagnostic_engine()
+    return run_diagnostic(
+        search_prompt, 
+        state, 
+        embedding_model, 
+        nli_model, 
+        collection,
+        target_parameter=active_param
+    )
 
 def run_aquaassist_pipeline(
     farmer_query: Optional[str],
@@ -417,19 +429,10 @@ def run_aquaassist_pipeline(
         out["debug"] = _format_debug(farmer_query, f"Fast-Path: Optimal DO Confirmation ({do_val} mg/L)", [], updated_state)
         return out
 
-    # Step 6: ChromaDB Retrieval & Grounded NLI Verification
-    embedding_model, nli_model, collection = get_diagnostic_engine()
-    # Pass target_parameter so retrieval isolation activates
+    # Step 6: ChromaDB Retrieval & Grounded NLI Verification (Isolated GPU Call)
     active_param = "DO" if "DO" in updated_state.get("telemetry", {}) else None
+    diag_result = _run_gpu_diagnostic(search_prompt, updated_state, active_param)
     
-    diag_result = run_diagnostic(
-        search_prompt, 
-        updated_state, 
-        embedding_model, 
-        nli_model, 
-        collection,
-        target_parameter=active_param
-    )
     decision = diag_result["decision"]
     evidence = diag_result["evidence"]
 
