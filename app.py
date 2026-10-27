@@ -269,7 +269,6 @@ def _format_debug(
     return "\n".join(lines)
 
 
-@spaces.GPU(duration=180)
 def run_aquaassist_pipeline(
     farmer_query: Optional[str],
     audio_path: Optional[str],
@@ -506,23 +505,44 @@ def handle_submit(text, audio_path, sessions, current_id, diag_state):
     text = (text or "").strip()
 
     if text:
-        # Typed Telugu and English are both accepted directly
         query, audio_for_pipeline = text, None
     elif audio_path:
         query, audio_for_pipeline = None, audio_path
     else:
         gr.Warning("Describe the pond symptoms or record your voice first.")
-        return unchanged
+        return
 
     session = _get_session(sessions, current_id)
     history = list(session.get("messages", []))
 
-    # Pass conversation history so anaphora and pronouns can be resolved
+    # --- IMMEDIATE YIELD: Show processing state in trace right away ---
+    initial_trace = (
+        "============================================================\n"
+        "          AQUAASSIST NEURO-SYMBOLIC PIPELINE TRACE          \n"
+        "============================================================\n"
+        f" [1] RECEIVED QUERY : \"{query or 'Voice Audio Input'}\"\n"
+        " [2] STATUS         : Running extraction & policy safety gates...\n"
+        "============================================================"
+    )
+    yield (
+        list(session.get("messages", [])),
+        sessions,
+        current_id,
+        diag_state,
+        "",
+        None,
+        None,
+        gr.update(visible=False),
+        initial_trace,
+        _radio_update(sessions, current_id),
+    )
+
+    # --- RUN PIPELINE ---
     result = run_aquaassist_pipeline(query, audio_for_pipeline, diag_state, session_history=history)
 
     if not result["ok"]:
         gr.Warning(result["error"])
-        return unchanged
+        return
     if result["toast"]:
         gr.Warning(result["toast"])
 
@@ -542,7 +562,8 @@ def handle_submit(text, audio_path, sessions, current_id, diag_state):
         if result["report"] else gr.update(value=None, visible=False)
     )
 
-    return (
+    # --- FINAL YIELD: Return complete results and full trace ---
+    yield (
         list(session["messages"]),
         sessions,
         current_id,
