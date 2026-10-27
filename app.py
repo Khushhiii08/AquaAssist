@@ -324,12 +324,17 @@ def run_aquaassist_pipeline(
     resolved_query = resolve_conversational_coreference(farmer_query, session_history or [], diag_state)
     
     # Step 3: Policy & Safety Router (Tier 1 to Tier 4)
-    # Check policy on actual user input to avoid false triggers from coreference expansions
     policy_status, policy_key = route_query_policy(farmer_query)
     if policy_status == "POLICY_INTERCEPT" and policy_key:
         rendered = render_policy_response(policy_key)
         out["response"] = rendered["message"]
-        out["debug"] = _format_debug(farmer_query, f"Policy Gate: {policy_key}", [], diag_state)
+        out["debug"] = _format_debug(
+            farmer_query, 
+            f"Policy Gate: {policy_key}", 
+            [], 
+            diag_state,
+            stage_info={"policy": f"BLOCKED by {policy_key}", "health": "SKIPPED"}
+        )
         return out
 
     # -------------------------------------------------------------------------
@@ -432,7 +437,7 @@ def run_aquaassist_pipeline(
     # Step 6: ChromaDB Retrieval & Grounded NLI Verification (Isolated GPU Call)
     active_param = "DO" if "DO" in updated_state.get("telemetry", {}) else None
     diag_result = _run_gpu_diagnostic(search_prompt, updated_state, active_param)
-    
+
     decision = diag_result["decision"]
     evidence = diag_result["evidence"]
 

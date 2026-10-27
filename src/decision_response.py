@@ -125,6 +125,70 @@ DECISION_RESPONSES: Dict[str, Dict[str, str]] = {
             "• **సెన్సార్ తనిఖీ:** మీ డిజిటల్ మీటర్‌ను రీ-క్యాలిబ్రేట్ చేయండి లేదా కెమికల్ టెస్ట్ కిట్ ద్వారా ఖచ్చితమైన స్థాయిని నిర్ధారించుకోండి."
         )
     },
+    "BANNED_SUBSTANCE_REFUSAL": {
+        "title": "Banned Substance Refusal / నిషేధించబడిన మందుల హెచ్చరిక",
+        "english": (
+            "⛔ **REGULATORY SAFETY INTERCEPT:**\n"
+            "• **Prohibited Compound:** The substance inquired about (e.g., Chloramphenicol, Nitrofurans) "
+            "is strictly banned by the Coastal Aquaculture Authority (CAA) and MPEDA.\n"
+            "• **Regulatory & Biological Risks:** Use of unapproved antibiotics results in severe bioaccumulation, "
+            "destruction of pond bio-filtration, toxic residue accumulation, and complete export consignment rejections.\n"
+            "• **Protocol:** Immediately halt the use of unapproved chemicals. Use certified, CAA-registered probiotics "
+            "and consult a licensed aquatic pathologist."
+        ),
+        "telugu": (
+            "⛔ **నిషేధించబడిన రసాయన హెచ్చరిక:**\n"
+            "• **చట్టరీత్యా నిషేధం:** మీరు ప్రస్తావించిన మందు (ఉదా: క్లోరాంఫెనికాల్, నైట్రోఫ్యూరాన్లు) కోస్టల్ ఆక్వాకల్చర్ అథారిటీ (CAA) "
+            "మరియు MPEDA నిబంధనల ప్రకారం చెరువులలో ఉపయోగించడం పూర్తిగా నిషేధించబడింది.\n"
+            "• **ప్రమాదాలు:** నిషేధిత యాంటీబయాటిక్స్ వాడటం వల్ల రొయ్యలు/చేపలలో రసాయన అవశేషాలు పేరుకుపోయి ఎగుమతులు రద్దవుతాయి మరియు వ్యాధి నిరోధకత దెబ్బతింటుంది.\n"
+            "• **చర్య:** వెంటనే ఈ మందుల వాడకాన్ని ఆపివేయండి. లైసెన్స్ పొందిన నిపుణుడిని సంప్రదించి ఆమోదించబడిన ప్రత్యామ్నాయాలను మాత్రమే వాడండి."
+        )
+    },
+
+    "ANTIBIOTIC_PRESCRIPTION_REFUSAL": {
+        "title": "Antibiotic Prescription Withheld / యాంటీబయాటిక్స్ నిబంధన",
+        "english": (
+            "⚠️ **PRESCRIPTION SAFEGUARD:**\n"
+            "• **No Blind Antibiotic Application:** AquaAssist does not provide dosages for pharmacological antibiotics.\n"
+            "• **Resistance Risk:** Prophylactic or unverified antibiotic use induces widespread antimicrobial resistance (AMR) "
+            "and collapses natural beneficial bacterial cycles.\n"
+            "• **Corrective Action:** Maintain optimal water quality (DO > 5.0 mg/L) and consult an accredited diagnostic laboratory "
+            "for culture and sensitivity testing."
+        ),
+        "telugu": (
+            "⚠️ **యాంటీబయాటిక్ నియంత్రణ హెచ్చరిక:**\n"
+            "• **యాంటీబయాటిక్స్ వాడకం పరిమితం:** సరైన పరీక్షలు లేకుండా యాంటీబయాటిక్స్ మోతాదులను సిస్టమ్ సూచించదు.\n"
+            "• **ప్రమాదం:** మోతాదు మించిన యాంటీబయాటిక్స్ చెరువులోని సహజ బ్యాక్టీరియాను నాశనం చేసి ప్రతికూల ప్రభావం చూపుతాయి.\n"
+            "• **చర్య:** నీటి నాణ్యతను కాపాడండి మరియు ల్యాబ్ పరీక్షల ద్వారా మాత్రమే సరైన మందులను ఎంచుకోండి."
+        )
+    },
+
+    "THERAPEUTIC_DOSE_REFUSAL": {
+        "title": "Therapeutic Dosage Withheld / చికిత్సా మోతాదు భద్రత",
+        "english": (
+            "⚠️ **THERAPEUTIC DOSAGE SAFEGUARD:**\n"
+            "• Prescribing chemical therapeutic dosages without verified water volume, biomass calculations, and active alkalinity "
+            "can trigger mass mortality via toxic chemical shock.\n"
+            "• Submit accurate pond parameters and clinical signs for appropriate guidance."
+        ),
+        "telugu": (
+            "⚠️ **చికిత్సా మోతాదు నిలిపివేయబడింది:**\n"
+            "• చెరువు నీటి విస్తీర్ణం, లోతు మరియు జీవుల బరువు తెలియకుండా రసాయన మోతాదులను వాడటం ప్రాణాంతకం.\n"
+            "• ఖచ్చితమైన వివరాలను నమోదు చేసి సరైన నివారణ మార్గదర్శకాలను పొందండి."
+        )
+    },
+
+    "OUT_OF_SCOPE_REFUSAL": {
+        "title": "Out of Scope / పరిధి వెలుపల",
+        "english": (
+            "This query falls outside the scope of practical pond limnology and clinical aquatic diagnostics.\n"
+            "Please inquire about pond water management, finfish/shrimp health, or feeding parameters."
+        ),
+        "telugu": (
+            "ఈ ప్రశ్న ఆక్వాకల్చర్ మరియు చెరువు నిర్వహణ పరిధిలోకి రాదు.\n"
+            "దయచేసి చెరువు నీటి నాణ్యత లేదా చేపలు/రొయ్యల ఆరోగ్యానికి సంబంధించిన ప్రశ్నలను అడగండి."
+        )
+    },
 
     "VAGUE_DIAGNOSTIC": {
         "title": "Clarification Required / మరిన్ని వివరాలు అవసరం",
@@ -141,6 +205,7 @@ DECISION_RESPONSES: Dict[str, Dict[str, str]] = {
             "3. **కొలతలు:** ప్రస్తుత ఆక్సిజన్ (DO), pH లేదా అమ్మోనియా రీడింగులు ఎంత ఉన్నాయి?"
         )
     }
+
 }
 
 
