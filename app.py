@@ -269,7 +269,7 @@ def _format_debug(
     return "\n".join(lines)
 
 
-@spaces.GPU
+@spaces.GPU(duration=180)
 def run_aquaassist_pipeline(
     farmer_query: Optional[str],
     audio_path: Optional[str],
