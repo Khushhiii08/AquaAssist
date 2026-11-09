@@ -57,6 +57,7 @@ temp_16khz_mono.wav
 bin/
 
 # Local Test Outputs, Spreadsheets, & Logs
+zipped_scripts/
 retrieval_output.txt
 *.xlsx
 *.tex
