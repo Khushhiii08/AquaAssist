@@ -263,3 +263,6 @@ python testing/run_blind_evaluation.py
 python batch_evaluate_aquaassist.py --folder messy_query_excelsheets
 python batch_evaluate_aquaassist.py --folder real_life_messy_queries
 ```
+
+## Developed By Team:
+Khushi Rawat, Jyothish Edigapalli, Tanagala Meghana and Bollipo Praisy ❤️
