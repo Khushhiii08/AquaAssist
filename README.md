@@ -266,3 +266,6 @@ python batch_evaluate_aquaassist.py --folder real_life_messy_queries
 
 ## Developed By Team:
 Khushi Rawat, Jyothish Edigapalli, Tanagala Meghana and Bollipo Praisy ❤️
+
+## Under the Guidance of:
+Mohan Allam, Dasari Rajiv Kumar, and Madhu Kiran Kallu
